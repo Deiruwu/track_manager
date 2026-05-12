@@ -1,0 +1,17 @@
+/target
+# Rust
+target/
+Cargo.lock
+
+# Entorno
+.env
+
+# Python
+Music_Services/.venv/
+Music_Services/__pycache__/
+Music_Services/**/__pycache__/
+Music_Services/**/*.pyc
+
+# IDEs
+.idea/
+*.iml
