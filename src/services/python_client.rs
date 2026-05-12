@@ -30,6 +30,12 @@ impl PythonClient {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Python no respondió".to_string())?;
 
+        // ─── INTERCEPCIÓN DEL PAYLOAD CRUDO ───────────────────────────────
+        // Usamos info! para asegurarnos de que salga en tu nivel de log actual.
+        // Una vez que caces el null, puedes bajar esto a tracing::debug! o quitarlo.
+        tracing::info!("Raw payload desde Python para '{}': {}", query, line);
+        // ──────────────────────────────────────────────────────────────────
+
         let val: Value = serde_json::from_str(&line)
             .map_err(|e| e.to_string())?;
 
@@ -40,7 +46,9 @@ impl PythonClient {
                 .to_string());
         }
 
+        // Aquí es donde actualmente está fallando tu código cuando encuentra el null
         serde_json::from_value(val["data"].clone())
-            .map_err(|e| e.to_string())
+            .map_err(|e| format!("Error deserializando Track: {}", e))
+        // Añadí un poco de contexto al error final para distinguirlo mejor
     }
 }
