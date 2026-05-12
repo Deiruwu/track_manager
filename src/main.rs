@@ -36,7 +36,7 @@ async fn main() {
 
 
     let home_dir = std::env::var("HOME").expect("No se pudo obtener la ruta del directorio de inicio");
-    let dowload_service = DownloadService::new(home_dir + "music_storage");
+    let dowload_service = DownloadService::new(home_dir + "/music_storage");
 
 
     let python_client = PythonClient::new("127.0.0.1", 9999);
