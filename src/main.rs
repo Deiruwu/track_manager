@@ -46,7 +46,7 @@ async fn main() {
 
     println!("Conexión a music_center establecida. Repo listo.");
 
-    TrackHubServer::new("127.0.0.1", 7878, track_manager.clone())
+    TrackHubServer::new("0.0.0.0", 7878, track_manager.clone())
         .start()
         .await
         .expect("El servidor falló");
