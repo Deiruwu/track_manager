@@ -6,6 +6,7 @@ mod repository;
 mod managers;
 mod services;
 pub mod api;
+pub mod utils;
 
 use repository::TrackRepository;
 use crate::infrastructure::init_db_pool;

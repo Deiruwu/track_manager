@@ -3,6 +3,8 @@ use tokio::net::TcpStream;
 use serde_json::Value;
 use crate::model::Track;
 
+pub use crate::utils::hash::generate_fallback_id;
+
 #[derive(Clone)]
 pub struct PythonClient {
     addr: String,
@@ -30,13 +32,8 @@ impl PythonClient {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Python no respondió".to_string())?;
 
-        // ─── INTERCEPCIÓN DEL PAYLOAD CRUDO ───────────────────────────────
-        // Usamos info! para asegurarnos de que salga en tu nivel de log actual.
-        // Una vez que caces el null, puedes bajar esto a tracing::debug! o quitarlo.
-        tracing::info!("Raw payload desde Python para '{}': {}", query, line);
-        // ──────────────────────────────────────────────────────────────────
-
-        let val: Value = serde_json::from_str(&line)
+        // 1. Convertimos el JSON crudo en un Value mutable
+        let mut val: Value = serde_json::from_str(&line)
             .map_err(|e| e.to_string())?;
 
         if val["status"] != "ok" {
@@ -46,9 +43,30 @@ impl PythonClient {
                 .to_string());
         }
 
-        // Aquí es donde actualmente está fallando tu código cuando encuentra el null
-        serde_json::from_value(val["data"].clone())
+        // ─── CAPA ANTICORRUPCIÓN ───────────────────────────────────────
+        // Navegamos por el árbol del JSON: data -> array de tracks -> array de artists
+        if let Some(tracks) = val["data"].as_array_mut() {
+            for track in tracks {
+                if let Some(artists) = track["artists"].as_array_mut() {
+                    for artist in artists {
+                        // Si detectamos la basura de YouTube (null)
+                        if artist["id"].is_null() {
+                            if let Some(name) = artist["name"].as_str() {
+                                // Generamos el ID y lo inyectamos directamente en el JSON
+                                let fallback_id = generate_fallback_id("yt_gen", name);
+                                artist["id"] = Value::String(fallback_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // ───────────────────────────────────────────────────────────────
+
+        // 2. Le pasamos el JSON ya purificado a Serde.
+        // Usamos .take() en lugar de .clone() para mover la memoria sin copiarla,
+        // maximizando el rendimiento en Rust.
+        serde_json::from_value(val["data"].take())
             .map_err(|e| format!("Error deserializando Track: {}", e))
-        // Añadí un poco de contexto al error final para distinguirlo mejor
     }
 }
