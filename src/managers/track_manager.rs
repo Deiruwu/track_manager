@@ -64,7 +64,8 @@ impl TrackManager {
     /// Radio: resuelve cada track contra DB.
     /// Cached si está descargado, Partial con datos de Python si no.
     pub async fn radio(&self, seed_id: &str) -> Result<Vec<TrackResult>, TrackManagerError> {
-        let tracks = self.python.call("radio", seed_id).await
+        // Indicamos explícitamente Vec<Track>
+        let tracks: Vec<Track> = self.python.call("radio", seed_id).await
             .map_err(TrackManagerError::MetadataError)?;
 
         self.resolve_list(tracks).await
@@ -72,7 +73,8 @@ impl TrackManager {
 
     /// Album: igual que radio.
     pub async fn album(&self, album_id: &str) -> Result<Vec<TrackResult>, TrackManagerError> {
-        let tracks = self.python.call("album", album_id).await
+        // Indicamos explícitamente Vec<Track>
+        let tracks: Vec<Track> = self.python.call("album", album_id).await
             .map_err(TrackManagerError::MetadataError)?;
 
         self.resolve_list(tracks).await
@@ -99,19 +101,19 @@ impl TrackManager {
     }
 
     async fn python_search_first(&self, query: &str) -> Result<Track, TrackManagerError> {
-        self.python.call("search", query).await
-            .map_err(TrackManagerError::MetadataError)?
-            .into_iter()
+        let tracks: Vec<Track> = self.python.call("search", query).await
+            .map_err(TrackManagerError::MetadataError)?;
+
+        tracks.into_iter()
             .next()
             .ok_or(TrackManagerError::NoResults)
     }
 
     async fn python_get_by_id(&self, id: &str) -> Result<Track, TrackManagerError> {
-        self.python.call("track", id).await
-            .map_err(TrackManagerError::MetadataError)?
-            .into_iter()
-            .next()
-            .ok_or(TrackManagerError::NoResults)
+        let track: Track = self.python.call("track", id).await
+            .map_err(TrackManagerError::MetadataError)?;
+
+        Ok(track)
     }
 
     async fn download_and_save(&self, track: Track) -> Result<Track, TrackManagerError> {
