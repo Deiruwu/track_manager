@@ -97,6 +97,13 @@ impl TrackHubServer {
     async fn dispatch(req: Request, manager: &TrackManager) -> Response {
         match req.action.as_str() {
 
+            "track" => {
+                match manager.resolve(&req.query).await {
+                    Ok(track) => Response::ok(track),
+                    Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
             "resolve" => {
                 match manager.resolve(&req.query).await {
                     Ok(track) => Response::ok(track),
