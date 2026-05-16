@@ -202,6 +202,22 @@ impl TrackRepository {
         Ok(())
     }
 
+    pub async fn update_played(&self, id: &str) -> Result<(), RepositoryError> {
+        sqlx::query!(
+        r#"
+        UPDATE tracks
+        SET play_count = COALESCE(play_count, 0) + 1,
+            last_played_at = NOW()
+        WHERE uuid = $1
+        "#,
+        id
+    )
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
     /// Actualiza únicamente el file_path de un track existente.
     pub async fn update_path(&self, id: &str, path: &str) -> Result<(), RepositoryError> {
         sqlx::query!(

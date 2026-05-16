@@ -132,6 +132,13 @@ impl TrackHubServer {
                 }
             }
 
+            "played" => {
+                match manager.played(&req.query).await {
+                    Ok(_)  => Response::ok(serde_json::json!({"message": "ok"})),
+                    Err(e) => Response::err(e.to_string()),
+                }
+            }
+
             _ => Response::err(format!("Acción desconocida: {}", req.action)),
         }
     }

@@ -21,8 +21,8 @@ pub enum TrackResult {
 impl TrackResult {
     pub fn from_track_and_db(python_track: Track, db_track: Option<Track>) -> Self {
         match db_track {
-            Some(cached) => Self::Cached(cached),
-            None => Self::Partial {
+            Some(cached) if cached.file_path.is_some() => Self::Cached(cached),
+            _ => Self::Partial {
                 id:               python_track.id,
                 title:            python_track.title,
                 artists:          python_track.artists,

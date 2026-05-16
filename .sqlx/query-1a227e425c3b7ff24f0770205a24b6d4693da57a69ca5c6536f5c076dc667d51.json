@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE tracks\n        SET play_count     = play_count + 1,\n            last_played_at = NOW()\n        WHERE uuid = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a227e425c3b7ff24f0770205a24b6d4693da57a69ca5c6536f5c076dc667d51"
+}

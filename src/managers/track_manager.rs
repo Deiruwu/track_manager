@@ -61,14 +61,35 @@ impl TrackManager {
         self.download_and_save(track).await
     }
 
+    pub async fn played(&self, id: &str) -> Result<(), TrackManagerError> {
+        self.repo.update_played(id).await
+            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))
+    }
+
     /// Radio: resuelve cada track contra DB.
     /// Cached si está descargado, Partial con datos de Python si no.
     pub async fn radio(&self, seed_id: &str) -> Result<Vec<TrackResult>, TrackManagerError> {
-        // Indicamos explícitamente Vec<Track>
         let tracks: Vec<Track> = self.python.call("radio", seed_id).await
             .map_err(TrackManagerError::MetadataError)?;
 
-        self.resolve_list(tracks).await
+        let mut cached  = Vec::new();
+        let mut partial = Vec::new();
+
+        for track in tracks {
+            let db = self.db_get(&track.id).await?;
+            let result = TrackResult::from_track_and_db(track, db);
+            match &result {
+                TrackResult::Cached(_)      => cached.push(result),
+                TrackResult::Partial { .. } => partial.push(result),
+            }
+        }
+
+        cached.truncate(10);
+        let needed = 15usize.saturating_sub(cached.len());
+        partial.truncate(needed);
+        cached.extend(partial);
+
+        Ok(cached)
     }
 
     /// Album: igual que radio.

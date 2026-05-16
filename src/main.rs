@@ -28,6 +28,14 @@ async fn main() {
         }
     };
 
+    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    sqlx::migrate::Migrator::new(migrations_dir)
+        .await
+        .expect("[Database] Error cargando migraciones")
+        .run(&pool)
+        .await
+        .expect("[Database] Error corriendo migraciones");
+
     let metada_services = PythonMicroservice::new("Music_Services/.venv", "Music_Services/hub.py");
 
     match metada_services.spawn_service().await {
