@@ -13,7 +13,11 @@ struct Request {
     action: String,
     #[serde(default)]
     query:  String,
+    #[serde(default = "default_radio_limit")]
+    limit:  usize,
 }
+
+fn default_radio_limit() -> usize { 15 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -112,7 +116,7 @@ impl TrackHubServer {
             }
 
             "radio" => {
-                match manager.radio(&req.query).await {
+                match manager.radio(&req.query, req.limit).await {
                     Ok(results) => Response::ok(results),
                     Err(e)      => Response::err(e.to_string()),
                 }
