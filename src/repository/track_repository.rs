@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use tracing::info;
 use crate::model::{Album, Artist, Track};
 use crate::repository::errors::RepositoryError;
 
@@ -231,6 +232,32 @@ impl TrackRepository {
         Ok(())
     }
 
+    pub async fn delete_track(&self, uuid: &str) -> Result<(), RepositoryError> {
+        // 1. Validar que existe
+        let track = self.get_by_id(uuid).await?
+            .ok_or_else(|| RepositoryError::Custom(format!("Track {} no encontrado", uuid)))?;
+
+        // 2. Borrado físico
+        if let Some(file_path) = track.file_path {
+            match tokio::fs::remove_file(&file_path).await {
+                Ok(_) => info!("Archivo físico eliminado: {}", file_path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    info!("El archivo físico ya no existía: {}", file_path);
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+        }
+
+        // 3. Borrado lógico
+        self.delete_db_record(uuid).await?;
+        info!("Track {} purgado de la base de datos", uuid);
+
+        Ok(())
+    }
+    // }
+
     // ── Helpers internos ──────────────────────────────────────────────────────
 
     async fn get_artists_for_track(&self, track_id: &str) -> Result<Vec<Artist>, RepositoryError> {
@@ -247,5 +274,33 @@ impl TrackRepository {
             .await?;
 
         Ok(rows.into_iter().map(|r| Artist { id: r.id, name: r.name }).collect())
+    }
+
+    pub async fn delete_db_record(&self, uuid: &str) -> Result<(), RepositoryError> {
+        sqlx::query!(
+            "DELETE FROM tracks WHERE uuid = $1",
+            uuid
+        )
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_analysis_data(&self, id: &str, bpm: Option<i32>, camelot_key: Option<String>) -> Result<(), RepositoryError> {
+        sqlx::query!(
+            r#"
+            UPDATE tracks
+            SET bpm = $1, camelot_key = $2
+            WHERE uuid = $3
+            "#,
+            bpm,
+            camelot_key,
+            id
+        )
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
     }
 }

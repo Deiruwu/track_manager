@@ -8,6 +8,9 @@ from repositories.yt.track import YTMusicTrackRepository
 from repositories.yt.radio import YTMusicRadioRepository
 from repositories.yt.album import YTMusicAlbumRepository
 
+# Importamos el nuevo servicio analizador
+from services.analyzer import AnalysisService
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -27,17 +30,44 @@ class MusicHubServer:
         self.radio_repo  = YTMusicRadioRepository(self.yt_client)
         self.album_repo  = YTMusicAlbumRepository(self.yt_client)
 
+        # Instanciamos el servicio de análisis
+        self.analyzer_service = AnalysisService()
+
         self.routes = {
             "search": self._handle_search,
             "track":  self._handle_track,
             "album":  self._handle_album,
             "radio":  self._handle_radio,
+            "analyze_local_file": self._handle_analyze,
         }
         logging.info("Repositorios y rutas listos.")
 
     # ─────────────────────────────────────────
     # HANDLERS
     # ─────────────────────────────────────────
+
+    async def _handle_analyze(self, payload: dict) -> dict:
+        """
+        Delega el procesamiento pesado de audio (FFT, ffprobe) a un thread
+        para evitar bloquear el loop principal de asyncio.
+        """
+        file_path = payload.get("query")
+        if not file_path:
+            return {"status": "error", "message": "Falta la ruta del archivo en la query"}
+
+        logging.info(f"Iniciando análisis en thread paralelo para: {file_path}")
+
+        try:
+            # Ejecución no bloqueante
+            result = await asyncio.to_thread(self.analyzer_service.analyze, file_path)
+            logging.info(f"Análisis completado para {file_path}: {result}")
+            return {"status": "ok", "data": result}
+
+        except FileNotFoundError as e:
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logging.error(f"Fallo crítico en analizador para {file_path}: {e}")
+            return {"status": "error", "message": "Fallo interno en el analizador de audio"}
 
     async def _handle_search(self, payload: dict) -> dict:
         query  = payload["query"]

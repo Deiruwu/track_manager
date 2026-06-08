@@ -101,20 +101,40 @@ impl TrackHubServer {
     async fn dispatch(req: Request, manager: &TrackManager) -> Response {
         match req.action.as_str() {
 
-            "track" => {
-                match manager.resolve(&req.query).await {
-                    Ok(track) => Response::ok(track),
-                    Err(e)    => Response::err(e.to_string()),
-                }
-            }
-
+            // 1. RESOLVE: Obtiene metadatos (locales o remotos). NO descarga el audio.
+            // Ideal para "Now Playing" o para verificar info antes de encolar.
             "resolve" => {
-                match manager.resolve(&req.query).await {
+                match manager.resolve_metadata(&req.query).await {
                     Ok(track) => Response::ok(track),
                     Err(e)    => Response::err(e.to_string()),
                 }
             }
 
+            // 2. SEARCH: Devuelve 'limit' resultados de YouTube.
+            "search" => {
+                match manager.search(&req.query, req.limit).await {
+                    Ok(results) => Response::ok(results),
+                    Err(e)      => Response::err(e.to_string()),
+                }
+            }
+
+            // 3. DOWNLOAD: Fuerza la descarga a Opus, análisis y guardado en BD.
+            "download" => {
+                match manager.download_track(&req.query).await {
+                    Ok(track) => Response::ok(track),
+                    Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
+            // 4. REMOVE: Purga la base de datos y elimina el .opus físico.
+            "remove" => {
+                match manager.repo.delete_track(&req.query).await {
+                    Ok(_)  => Response::ok(serde_json::json!({"message": "deleted"})),
+                    Err(e) => Response::err(e.to_string()),
+                }
+            }
+
+            // --- Otros comandos que ya tenías ---
             "radio" => {
                 match manager.radio(&req.query, req.limit).await {
                     Ok(results) => Response::ok(results),

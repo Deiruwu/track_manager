@@ -46,22 +46,27 @@ impl DownloadService {
 
         let url = format!("https://www.youtube.com/watch?v={}", track.id);
 
-        let status = Command::new("yt-dlp")
+        let output = Command::new("yt-dlp")
             .args([
+                "-f", "ba[ext=webm]/ba[ext=opus]/ba",
                 "-x",
-                "--audio-quality", "0",
-                "--extractor-args", "youtube:player_client=android",
-                "-r", "2M",
+                "--audio-format", "opus",
+                "-r", "3M",
                 "-o", &output_template,
                 &url,
             ])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .stderr(Stdio::piped())
+            .output()
             .await?;
 
-        if !status.success() {
-            return Err(DownloadError::YtDlpFailed(format!("exit status: {}", status)));
+        if !output.status.success() {
+            let err_msg = String::from_utf8_lossy(&output.stderr);
+            let clean_err = err_msg.lines()
+                .find(|l| l.contains("ERROR:"))
+                .unwrap_or("Error desconocido de yt-dlp");
+
+            return Err(DownloadError::YtDlpFailed(clean_err.to_string()));
         }
 
         self.find_file(&track.id).await
