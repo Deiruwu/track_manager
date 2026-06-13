@@ -91,7 +91,7 @@ impl TrackManager {
         for track in tracks.iter_mut() {
             let db_result = self.get_local_track(&track.id).await;
             match db_result {
-                Ok(db_track) => track.file_path = db_track.file_path,
+                Ok(db_track) => *track = db_track,
                 Err(_)      => {},
             }
 
