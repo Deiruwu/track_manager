@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE tracks\n        SET play_count = COALESCE(play_count, 0) + 1,\n            last_played_at = NOW()\n        WHERE uuid = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c0d3745eeeadd9f58b008541eb30d524f9a06ecc393428966185f70fbc65de48"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE tracks\n            SET bpm = $1, camelot_key = $2\n            WHERE uuid = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "40364956bc0c503aa934590bce5a5832a3dedf6cd2f73c8ec3880346a5ea93b2"
+}

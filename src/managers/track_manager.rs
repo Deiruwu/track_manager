@@ -87,6 +87,16 @@ impl TrackManager {
             .map_err(TrackManagerError::MetadataError)?;
 
         tracks.truncate(limit);
+
+        for track in tracks.iter_mut() {
+            let db_result = self.get_local_track(&track.id).await;
+            match db_result {
+                Ok(db_track) => track.file_path = db_track.file_path,
+                Err(_)      => {},
+            }
+
+        };
+
         Ok(tracks)
     }
 
