@@ -1,6 +1,6 @@
 from ytmusicapi import YTMusic
 from models.track import Track
-from repositories.yt._mapper import map_artists, map_album, best_thumbnail
+from repositories.yt._mapper import map_artists, map_album, best_thumbnails
 
 
 def _parse_length(item: dict) -> int:
@@ -29,12 +29,13 @@ class YTMusicRadioRepository:
     @staticmethod
     def _map_radio_track(item: dict) -> Track:
         raw_thumbs = item.get('thumbnails') or item.get('thumbnail') or []
-
+        small, large = best_thumbnails(raw_thumbs)
         return Track(
             id=item.get('videoId', ''),
             title=item.get('title', ''),
             artists=map_artists(item.get('artists', [])),
             duration_seconds=_parse_length(item),
-            thumbnail=best_thumbnail(raw_thumbs),
+            thumbnail_small=small,
+            thumbnail_large=large,
             album=map_album(item.get('album'))
         )

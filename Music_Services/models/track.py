@@ -11,7 +11,8 @@ class Track:
     title: str
     artists: tuple[ArtistRef, ...]
     duration_seconds: int
-    thumbnail: Optional[Thumbnail]
+    thumbnail_small: Optional[Thumbnail]
+    thumbnail_large: Optional[Thumbnail]
     album: Optional[AlbumRef] = None
 
     def to_dict(self) -> dict:
@@ -20,6 +21,7 @@ class Track:
             "title": self.title,
             "artists": [artist.to_dict() for artist in self.artists],
             "duration_seconds": self.duration_seconds,
-            "thumbnail": self.thumbnail.to_dict() if self.thumbnail else None,
+            "thumbnail_small": self.thumbnail_small.url if self.thumbnail_small else None,
+            "thumbnail_large": self.thumbnail_large.url if self.thumbnail_large else None,
             "album": self.album.to_dict() if self.album else None,
         }

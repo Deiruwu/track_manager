@@ -18,30 +18,33 @@ def map_album(raw: dict | None) -> AlbumRef | None:
 
 
 def map_track(item: dict) -> Track:
+    small, large = best_thumbnails(item.get('thumbnails', []))
     return Track(
         id=item.get('videoId', ''),
         title=item.get('title', ''),
         artists=map_artists(item.get('artists', [])),
         duration_seconds=item.get('duration_seconds') or 0,
-        thumbnail=best_thumbnail(item.get('thumbnails', [])),
+        thumbnail_small=small,
+        thumbnail_large=large,
         album=map_album(item.get('album'))
     )
 
 
-def best_thumbnail(raw: list) -> Thumbnail | None:
+def best_thumbnails(raw: list) -> tuple[Thumbnail | None, Thumbnail | None]:
     if not raw:
-        return None
+        return None, None
     mapped = [
         Thumbnail(url=t.get('url', ''), width=t.get('width', 0), height=t.get('height', 0))
         for t in raw
     ]
-    exact = next((t for t in mapped if t.width == 120 and t.height == 120), None)
-    if exact:
-        return exact
-    target = 120 * 120
-    return min(mapped, key=lambda t: abs((t.width * t.height) - target))
 
+    large = max(mapped, key=lambda t: t.height)
 
-def map_thumbnails_nested(vid: dict) -> Thumbnail | None:
+    candidates = [t for t in mapped if t.height >= 120]
+    small = min(candidates, key=lambda t: t.height) if candidates else large
+
+    return small, large
+
+def map_thumbnails_nested(vid: dict) -> tuple[Thumbnail | None, Thumbnail | None]:
     raw = vid.get('thumbnail', {}).get('thumbnails', [])
-    return best_thumbnail(raw)
+    return best_thumbnails(raw)

@@ -20,12 +20,14 @@ class YTMusicTrackRepository:
             author = vid.get('author', 'Desconocido')
             artists, album_ref = await self._enrich(track_id, title, author)
 
+            thumbnail_small, thumbnail_large = map_thumbnails_nested(vid)
             return Track(
                 id=track_id,
                 title=title,
                 artists=artists,
                 duration_seconds=int(vid.get('lengthSeconds', 0)),
-                thumbnail=map_thumbnails_nested(vid),
+                thumbnail_small=thumbnail_small,
+                thumbnail_large=thumbnail_large,
                 album=album_ref
             )
         except Exception as e:

@@ -2,7 +2,7 @@ from ytmusicapi import YTMusic
 from models.track import Track
 from models.artist import ArtistRef
 from models.album import AlbumRef
-from repositories.yt._mapper import best_thumbnail
+from repositories.yt._mapper import best_thumbnails
 
 
 class YTMusicAlbumRepository:
@@ -33,15 +33,14 @@ class YTMusicAlbumRepository:
             ArtistRef(id=a.get('id', ''), name=a.get('name', ''))
             for a in item.get('artists', [])
         )
-
-        # Los tracks del álbum tienen thumbnails null, usamos la del álbum
         track_thumbnails = item.get('thumbnails') or album_thumbnails
-
+        small, large = best_thumbnails(track_thumbnails)
         return Track(
             id=item.get('videoId', ''),
             title=item.get('title', ''),
             artists=artists,
             duration_seconds=item.get('duration_seconds') or 0,
-            thumbnail=best_thumbnail(track_thumbnails),
+            thumbnail_small=small,
+            thumbnail_large=large,
             album=album_ref
         )

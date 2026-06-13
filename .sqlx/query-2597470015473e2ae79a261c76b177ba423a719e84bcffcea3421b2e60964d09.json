@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                t.uuid,\n                t.title,\n                t.duration_seconds,\n                t.thumbnail_url,\n                t.bpm,\n                t.camelot_key,\n                t.file_path,\n                t.added_at,\n                al.id   AS \"album_id?\",\n                al.name AS \"album_name?\"\n            FROM   tracks t\n            LEFT JOIN albums al ON al.id = t.album_id\n            WHERE  t.uuid = $1\n            ",
+  "query": "\n        SELECT\n            t.uuid,\n            t.title,\n            t.duration_seconds,\n            t.thumbnail_small,\n            t.thumbnail_large,\n            t.bpm,\n            t.camelot_key,\n            t.file_path,\n            t.added_at,\n            al.id   AS \"album_id?\",\n            al.name AS \"album_name?\"\n        FROM   tracks t\n        LEFT JOIN albums al ON al.id = t.album_id\n        ",
   "describe": {
     "columns": [
       {
@@ -20,44 +20,47 @@
       },
       {
         "ordinal": 3,
-        "name": "thumbnail_url",
+        "name": "thumbnail_small",
         "type_info": "Text"
       },
       {
         "ordinal": 4,
+        "name": "thumbnail_large",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "bpm",
         "type_info": "Int4"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "camelot_key",
         "type_info": "Text"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "file_path",
         "type_info": "Text"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "added_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "album_id?",
         "type_info": "Text"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "album_name?",
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Left": [
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -68,9 +71,10 @@
       true,
       true,
       true,
-      false,
-      false
+      true,
+      true,
+      true
     ]
   },
-  "hash": "566ac3f4393176b22d5c782993271be34981e0122c8dfd0fcb0e06a93c885b8a"
+  "hash": "2597470015473e2ae79a261c76b177ba423a719e84bcffcea3421b2e60964d09"
 }

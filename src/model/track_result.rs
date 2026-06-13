@@ -6,7 +6,6 @@ use crate::model::{Album, Artist, Track};
 pub enum TrackResult {
     #[serde(rename = "cached")]
     Cached(Track),
-
     #[serde(rename = "partial")]
     Partial {
         id:               String,
@@ -14,7 +13,8 @@ pub enum TrackResult {
         artists:          Vec<Artist>,
         album:            Option<Album>,
         duration_seconds: i32,
-        thumbnail_url:    Option<String>,
+        thumbnail_small:  Option<String>,
+        thumbnail_large:  Option<String>,
     },
 }
 
@@ -28,7 +28,8 @@ impl TrackResult {
                 artists:          python_track.artists,
                 album:            python_track.album,
                 duration_seconds: python_track.duration_seconds,
-                thumbnail_url:    python_track.thumbnail_url,
+                thumbnail_small:  python_track.thumbnail_small,
+                thumbnail_large:  python_track.thumbnail_large,
             },
         }
     }

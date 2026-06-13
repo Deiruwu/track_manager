@@ -46,7 +46,6 @@ impl TrackManager {
     /// Falla rápido (O(1)) si no está el registro o no hay archivo físico.
     /// No hace llamadas a Python ni a YouTube.
     pub async fn get_local_track(&self, query: &str) -> Result<Track, TrackManagerError> {
-        // Extraemos ID del link, o asumimos que el query mismo es el ID
         let id = extract_video_id(query).unwrap_or_else(|| query.trim().to_string());
 
         if let Some(cached) = self.db_get(&id).await? {
@@ -76,6 +75,7 @@ impl TrackManager {
         if let Some(cached) = self.db_get(&track.id).await? {
             return Ok(cached);
         }
+        let track = self.python_get_by_id(&track.id).await?;
 
         Ok(track)
     }

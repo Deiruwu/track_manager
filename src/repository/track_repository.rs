@@ -24,7 +24,8 @@ impl TrackRepository {
                 t.uuid,
                 t.title,
                 t.duration_seconds,
-                t.thumbnail_url,
+                t.thumbnail_small,
+                t.thumbnail_large,
                 t.bpm,
                 t.camelot_key,
                 t.file_path,
@@ -56,7 +57,8 @@ impl TrackRepository {
             id:               row.uuid,
             title:            row.title,
             duration_seconds: row.duration_seconds,
-            thumbnail_url:    row.thumbnail_url,
+            thumbnail_small:  row.thumbnail_small,
+            thumbnail_large:  row.thumbnail_large,
             bpm:              row.bpm,
             camelot_key:      row.camelot_key,
             file_path:        row.file_path,
@@ -73,7 +75,8 @@ impl TrackRepository {
             t.uuid,
             t.title,
             t.duration_seconds,
-            t.thumbnail_url,
+            t.thumbnail_small,
+            t.thumbnail_large,
             t.bpm,
             t.camelot_key,
             t.file_path,
@@ -101,7 +104,8 @@ impl TrackRepository {
                 id:               row.uuid,
                 title:            row.title,
                 duration_seconds: row.duration_seconds,
-                thumbnail_url:    row.thumbnail_url,
+                thumbnail_small:  row.thumbnail_small,
+                thumbnail_large:  row.thumbnail_large,
                 bpm:              row.bpm,
                 camelot_key:      row.camelot_key,
                 file_path:        row.file_path,
@@ -165,10 +169,10 @@ impl TrackRepository {
             r#"
             INSERT INTO tracks (
                 uuid, title, duration_seconds,
-                album_id, thumbnail_url,
+                album_id, thumbnail_small, thumbnail_large,
                 bpm, camelot_key, file_path
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (uuid) DO UPDATE SET
                 file_path = EXCLUDED.file_path
             "#,
@@ -176,7 +180,8 @@ impl TrackRepository {
             track.title,
             track.duration_seconds,
             track.album.as_ref().map(|a| &a.id),
-            track.thumbnail_url,
+            track.thumbnail_small,
+            track.thumbnail_large,
             track.bpm,
             track.camelot_key,
             track.file_path,
