@@ -95,7 +95,6 @@ impl TrackManager {
     pub async fn download_track(&self, query: &str) -> Result<Track, TrackManagerError> {
         let track = self.resolve_metadata(query).await?;
 
-        // Cache Hit físico: Evita saturar YouTube y el disco
         if track.file_path.is_some() {
             return Ok(track);
         }

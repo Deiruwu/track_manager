@@ -5,11 +5,14 @@ use std::time::Duration;
 /// Inicializa el pool de conexiones a PostgreSQL usando la variable de entorno DATABASE_URL.
 pub async fn init_db_pool() -> Result<PgPool, sqlx::Error> {
     // Extraemos la URL.
-    // Práctica recomendada: Fallar rápido (Fail-fast) usando `expect`.
-    // Mala práctica a evitar: Proveer un fallback hardcodeado tipo `.unwrap_or("postgres://...".into())`.
     // Si el entorno está mal configurado, la aplicación no debe arrancar.
-    let db_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL debe estar definida en el entorno o en el archivo .env");
+    let db_url = format!(
+        "postgres://{}:{}@{}/{}",
+        env::var("POSTGRES_USER").expect("POSTGRES_USER no definida"),
+        env::var("POSTGRES_PASSWORD").expect("POSTGRES_PASSWORD no definida"),
+        env::var("POSTGRES_HOST").expect("POSTGRES_HOST no definida"),
+        env::var("POSTGRES_DB").expect("POSTGRES_DB no definida"),
+    );
 
     // Construcción del Pool.
     // Cuándo NO usar `PgPool::connect(&db_url)` directamente: En cualquier entorno que no sea

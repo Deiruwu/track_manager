@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from ytmusicapi import YTMusic
 
 from repositories.yt.search import YTMusicSearchRepository
@@ -149,7 +150,9 @@ class MusicHubServer:
 
 
 if __name__ == "__main__":
-    hub = MusicHubServer(host='127.0.0.1', port=9999)
+    host = os.environ.get("PYTHON_HOST", "127.0.0.1")
+    port = int(os.environ.get("PYTHON_PORT", 9999))
+    hub = MusicHubServer(host=host, port=port)
     try:
         asyncio.run(hub.start())
     except KeyboardInterrupt:

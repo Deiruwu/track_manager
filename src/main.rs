@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use dotenvy::dotenv;
 
 mod infrastructure;
@@ -44,18 +45,37 @@ async fn main() {
     }
 
 
-    let home_dir = std::env::var("HOME").expect("No se pudo obtener la ruta del directorio de inicio");
-    let dowload_service = DownloadService::new(home_dir + "/music_storage");
+    let music_storage = std::env::var("MUSIC_STORAGE_PATH")
+        .expect("MUSIC_STORAGE_PATH no definida en .env");
+
+    let download_service = DownloadService::new(PathBuf::from(music_storage));
 
 
-    let python_client = PythonClient::new("127.0.0.1", 9999);
+    let server_host = std::env::var("SERVER_HOST")
+        .unwrap_or_else(|_| "0.0.0.0".to_string());
+
+    let server_port: u16 = std::env::var("SERVER_PORT")
+        .unwrap_or_else(|_| "7878".to_string())
+        .parse()
+        .expect("SERVER_PORT debe ser un número válido");
+
+    let python_host = std::env::var("PYTHON_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    let python_port: u16 = std::env::var("PYTHON_PORT")
+        .unwrap_or_else(|_| "9999".to_string())
+        .parse()
+        .expect("PYTHON_PORT debe ser un número válido");
+
+
+    let python_client = PythonClient::new(python_host, python_port);
 
     let track_repo = TrackRepository::new(pool.clone());
-    let track_manager = TrackManager::new(track_repo.clone(), dowload_service, python_client);
+    let track_manager = TrackManager::new(track_repo.clone(), download_service, python_client);
 
     println!("Conexión a music_center establecida. Repo listo.");
 
-    TrackHubServer::new("0.0.0.0", 7878, track_manager.clone())
+    TrackHubServer::new(server_host, server_port, track_manager.clone())
         .start()
         .await
         .expect("El servidor falló");

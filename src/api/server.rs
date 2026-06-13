@@ -134,7 +134,6 @@ impl TrackHubServer {
                 }
             }
 
-            // --- Otros comandos que ya tenías ---
             "radio" => {
                 match manager.radio(&req.query, req.limit).await {
                     Ok(results) => Response::ok(results),

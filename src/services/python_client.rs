@@ -11,8 +11,8 @@ pub struct PythonClient {
 }
 
 impl PythonClient {
-    pub fn new(host: &str, port: u16) -> Self {
-        Self { addr: format!("{}:{}", host, port) }
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Self { addr: format!("{}:{}", host.into(), port) }
     }
 
     pub async fn call<T: DeserializeOwned>(&self, action: &str, query: &str) -> Result<T, String> {
