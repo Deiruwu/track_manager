@@ -15,11 +15,13 @@ struct Request {
     action: String,
     #[serde(default)]
     query:  String,
-    #[serde(default = "default_radio_limit")]
+    #[serde(default)]
+    ids:    Vec<String>,
+    #[serde(default = "default_limit")]
     limit:  usize,
 }
 
-fn default_radio_limit() -> usize { 15 }
+fn default_limit() -> usize { 15 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -58,8 +60,6 @@ impl TrackHubServer {
 
         loop {
             let (stream, peer) = listener.accept().await?;
-            info!("Nueva conexión desde {peer}");
-
             let manager = self.manager.clone();
             let connections = Arc::clone(&self.connections);
 
@@ -87,7 +87,6 @@ impl TrackHubServer {
             let line = line.trim().to_string();
             if line.is_empty() { continue; }
 
-            info!("← {line}");
 
             let response = match serde_json::from_str::<Request>(&line) {
                 Err(e)  => Response::err(format!("JSON inválido: {e}")),
@@ -96,9 +95,6 @@ impl TrackHubServer {
 
             let json = serde_json::to_string(&response).unwrap();
 
-            info!("→ {}", serde_json::from_str::<serde_json::Value>(&json)
-                .and_then(|v| serde_json::to_string_pretty(&v))
-                .unwrap_or(json.clone()));
 
             writer.write_all(format!("{json}\n").as_bytes()).await?;
         }
@@ -115,6 +111,25 @@ impl TrackHubServer {
                 match manager.resolve_metadata(&req.query).await {
                     Ok(track) => Response::ok(track),
                     Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
+
+            // 1b. RESOLVE_MANY: Resuelve hasta 250 IDs en paralelo.
+            // Primero consulta Postgres en batch; los faltantes van a Python en paralelo.
+            "resolve_many" => {
+                const MAX: usize = 250;
+                if req.ids.is_empty() {
+                    return Response::err("Se requiere el campo 'ids'");
+                }
+                let ids = if req.ids.len() > MAX {
+                    req.ids[..MAX].to_vec()
+                } else {
+                    req.ids
+                };
+                match manager.resolve_many(&ids).await {
+                    Ok(tracks) => Response::ok(tracks),
+                    Err(e)     => Response::err(e.to_string()),
                 }
             }
 
