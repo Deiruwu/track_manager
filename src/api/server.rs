@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, info};
@@ -38,14 +40,15 @@ impl Response {
 // ── Server ────────────────────────────────────────────────────────────────────
 
 pub struct TrackHubServer {
-    host:    String,
-    port:    u16,
-    manager: TrackManager,
+    host:        String,
+    port:        u16,
+    manager:     TrackManager,
+    connections: Arc<AtomicUsize>,
 }
 
 impl TrackHubServer {
     pub fn new(host: impl Into<String>, port: u16, manager: TrackManager) -> Self {
-        Self { host: host.into(), port, manager }
+        Self { host: host.into(), port, manager, connections: Arc::new(AtomicUsize::new(0)) }
     }
 
     pub async fn start(self) -> std::io::Result<()> {
@@ -58,12 +61,17 @@ impl TrackHubServer {
             info!("Nueva conexión desde {peer}");
 
             let manager = self.manager.clone();
+            let connections = Arc::clone(&self.connections);
+
+            let active = connections.fetch_add(1, Ordering::Relaxed) + 1;
+            tracing::debug!("Conexión abierta desde {peer} — activas: {active}");
 
             tokio::spawn(async move {
                 if let Err(e) = Self::handle_client(stream, manager).await {
                     error!("Error con {peer}: {e}");
                 }
-                info!("Conexión cerrada con {peer}");
+                let active = connections.fetch_sub(1, Ordering::Relaxed) - 1;
+                info!("Conexión cerrada con {peer} — activas: {active}");
             });
         }
     }
