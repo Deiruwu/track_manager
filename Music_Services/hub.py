@@ -119,7 +119,6 @@ class MusicHubServer:
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info('peername')
-        logging.info(f"Nueva conexion desde {addr}")
         try:
             while True:
                 data = await reader.readline()
@@ -128,7 +127,6 @@ class MusicHubServer:
                 message = data.decode('utf-8').strip()
                 if not message:
                     continue
-                logging.info(f"Recibido: {message}")
                 response = (json.dumps(await self.process_command(message), ensure_ascii=False) + "\n").encode('utf-8')
                 writer.write(response)
                 await writer.drain()

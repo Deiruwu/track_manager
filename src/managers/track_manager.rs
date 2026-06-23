@@ -1,3 +1,4 @@
+use tokio::task::JoinSet;
 use tracing::{error, info};
 use crate::model::{Track, TrackResult};
 use crate::repository::TrackRepository;
@@ -83,19 +84,17 @@ impl TrackManager {
     /// Acción "search": Múltiples resultados para mostrar menú al usuario.
     /// Recicla el cliente Python en lugar de spawnear `yt-dlp` crudo en Rust.
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<Track>, TrackManagerError> {
-        let mut tracks: Vec<Track> = self.python.call("search", query).await
-            .map_err(TrackManagerError::MetadataError)?;
-
-        tracks.truncate(limit);
+        let mut tracks: Vec<Track> = self.python.call_with_payload(serde_json::json!({
+            "action": "search",
+            "query":  query,
+            "limit":  limit,
+        })).await.map_err(TrackManagerError::MetadataError)?;
 
         for track in tracks.iter_mut() {
-            let db_result = self.get_local_track(&track.id).await;
-            match db_result {
-                Ok(db_track) => *track = db_track,
-                Err(_)      => {},
+            if let Ok(db_track) = self.get_local_track(&track.id).await {
+                *track = db_track;
             }
-
-        };
+        }
 
         Ok(tracks)
     }
@@ -141,6 +140,47 @@ impl TrackManager {
         self.resolve_list(tracks).await
     }
 
+
+
+    /// Acción "resolve_many": Resuelve hasta 250 IDs.
+    /// 1. Batch query a Postgres (2 queries totales, sin N+1).
+    /// 2. Los IDs ausentes se mandan a Python en paralelo.
+    pub async fn resolve_many(&self, ids: &[String]) -> Result<Vec<Track>, TrackManagerError> {
+        const MAX: usize = 250;
+        let ids = if ids.len() > MAX { &ids[..MAX] } else { ids };
+
+        // 1. Lo que ya está en BD (2 queries, sin importar cuántos IDs)
+        let found = self.repo.get_many_by_ids(ids).await
+            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
+
+        let found_ids: std::collections::HashSet<&str> =
+            found.iter().map(|t| t.id.as_str()).collect();
+
+        // 2. Los que faltan → Python en paralelo
+        let missing: Vec<&String> = ids.iter()
+            .filter(|id| !found_ids.contains(id.as_str()))
+            .collect();
+
+        let mut set = JoinSet::new();
+        for id in missing {
+            let python = self.python.clone();
+            let id = id.clone();
+            set.spawn(async move {
+                python.call::<Track>("track", &id).await.ok()
+            });
+        }
+
+        let mut from_yt: Vec<Track> = Vec::new();
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some(track)) = res {
+                from_yt.push(track);
+            }
+        }
+
+        let mut all = found;
+        all.extend(from_yt);
+        Ok(all)
+    }
 
     // ─── INTERNOS (I/O y Helpers) ─────────────────────────────────────────────
 

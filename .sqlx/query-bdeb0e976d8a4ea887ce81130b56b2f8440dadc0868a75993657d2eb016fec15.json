@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                t.uuid,\n                t.title,\n                t.duration_seconds,\n                t.thumbnail_small,\n                t.thumbnail_large,\n                t.bpm,\n                t.camelot_key,\n                t.file_path,\n                t.added_at,\n                al.id   AS \"album_id?\",\n                al.name AS \"album_name?\"\n            FROM   tracks t\n            LEFT JOIN albums al ON al.id = t.album_id\n            WHERE  t.uuid = ANY($1)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "uuid",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "duration_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "thumbnail_small",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "thumbnail_large",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "bpm",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "camelot_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "file_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "added_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "album_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "album_name?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "bdeb0e976d8a4ea887ce81130b56b2f8440dadc0868a75993657d2eb016fec15"
+}

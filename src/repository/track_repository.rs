@@ -118,6 +118,93 @@ impl TrackRepository {
         Ok(tracks)
     }
 
+    /// Resuelve hasta 250 IDs en 2 queries planas (sin N+1).
+    /// Devuelve solo los que existen en BD; los ausentes el caller los busca en YT.
+    pub async fn get_many_by_ids(&self, ids: &[String]) -> Result<Vec<Track>, RepositoryError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Query 1: tracks + álbumes
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                t.uuid,
+                t.title,
+                t.duration_seconds,
+                t.thumbnail_small,
+                t.thumbnail_large,
+                t.bpm,
+                t.camelot_key,
+                t.file_path,
+                t.added_at,
+                al.id   AS "album_id?",
+                al.name AS "album_name?"
+            FROM   tracks t
+            LEFT JOIN albums al ON al.id = t.album_id
+            WHERE  t.uuid = ANY($1)
+            "#,
+            ids
+        )
+            .fetch_all(&self.pool)
+            .await?;
+
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let found_ids: Vec<String> = rows.iter().map(|r| r.uuid.clone()).collect();
+
+        // Query 2: todos los artistas de todos esos tracks de una vez
+        let artist_rows = sqlx::query!(
+            r#"
+            SELECT ta.track_uuid, a.id, a.name
+            FROM   track_artists ta
+            JOIN   artists a ON a.id = ta.artist_id
+            WHERE  ta.track_uuid = ANY($1)
+            "#,
+            &found_ids
+        )
+            .fetch_all(&self.pool)
+            .await?;
+
+        // Agrupar artistas por track_uuid
+        let mut artists_map: std::collections::HashMap<String, Vec<Artist>> =
+            std::collections::HashMap::new();
+        for row in artist_rows {
+            artists_map
+                .entry(row.track_uuid)
+                .or_default()
+                .push(Artist { id: row.id, name: row.name });
+        }
+
+        let tracks = rows
+            .into_iter()
+            .map(|row| {
+                let artists = artists_map.remove(&row.uuid).unwrap_or_default();
+                let album = match (row.album_id, row.album_name) {
+                    (Some(id), Some(name)) => Some(Album { id, name }),
+                    _                      => None,
+                };
+                Track {
+                    id:               row.uuid,
+                    title:            row.title,
+                    duration_seconds: row.duration_seconds,
+                    thumbnail_small:  row.thumbnail_small,
+                    thumbnail_large:  row.thumbnail_large,
+                    bpm:              row.bpm,
+                    camelot_key:      row.camelot_key,
+                    file_path:        row.file_path,
+                    added_at:         row.added_at,
+                    album,
+                    artists,
+                }
+            })
+            .collect();
+
+        Ok(tracks)
+    }
+
     pub async fn get_all_ids(&self) -> Result<Vec<String>, RepositoryError> {
         let rows = sqlx::query!("SELECT uuid FROM tracks")
             .fetch_all(&self.pool)

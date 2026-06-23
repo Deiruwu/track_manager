@@ -1,6 +1,6 @@
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use serde_json::Value;
+use serde_json::{json, Value};
 use serde::de::DeserializeOwned;
 
 pub use crate::utils::hash::generate_fallback_id;
@@ -15,15 +15,23 @@ impl PythonClient {
         Self { addr: format!("{}:{}", host.into(), port) }
     }
 
+    /// Llamada simple: action + query string.
     pub async fn call<T: DeserializeOwned>(&self, action: &str, query: &str) -> Result<T, String> {
+        self.call_with_payload(json!({
+            "action": action,
+            "query":  query,
+        })).await
+    }
+
+    /// Llamada con payload arbitrario — para search (limit, filter) u otros casos.
+    pub async fn call_with_payload<T: DeserializeOwned>(&self, payload: Value) -> Result<T, String> {
         let stream = TcpStream::connect(&self.addr).await
             .map_err(|e| format!("No se pudo conectar al hub Python: {e}"))?;
 
         let (reader, mut writer) = stream.into_split();
         let mut lines = BufReader::new(reader).lines();
 
-        let payload = format!("{{\"action\":\"{action}\",\"query\":\"{query}\"}}\n");
-        writer.write_all(payload.as_bytes()).await
+        writer.write_all((payload.to_string() + "\n").as_bytes()).await
             .map_err(|e| e.to_string())?;
 
         let line = lines.next_line().await
@@ -40,7 +48,15 @@ impl PythonClient {
                 .to_string());
         }
 
-        // ─── CAPA ANTICORRUPCIÓN DINÁMICA ──────────────────────────────
+        Self::sanitize(&mut val["data"]);
+
+        serde_json::from_value::<T>(val["data"].take())
+            .map_err(|e| format!("Error deserializando el payload: {}", e))
+    }
+
+    // ─── Helper interno ───────────────────────────────────────────────────────
+
+    fn sanitize(data: &mut Value) {
         let sanitize_track = |track: &mut Value| {
             if track["thumbnail_url"].is_null() {
                 if let Some(url) = track["thumbnail"]["url"].as_str().map(str::to_string) {
@@ -49,7 +65,6 @@ impl PythonClient {
             }
             track.as_object_mut().map(|o| o.remove("thumbnail"));
 
-            // artist.id nulo → fallback generado
             if let Some(artists) = track.get_mut("artists").and_then(|a| a.as_array_mut()) {
                 for artist in artists {
                     if artist["id"].is_null() {
@@ -62,17 +77,10 @@ impl PythonClient {
             }
         };
 
-        let data_ref = &mut val["data"];
-        if let Some(tracks) = data_ref.as_array_mut() {
-            for track in tracks {
-                sanitize_track(track);
-            }
-        } else if data_ref.is_object() {
-            sanitize_track(data_ref);
+        if let Some(tracks) = data.as_array_mut() {
+            for track in tracks { sanitize_track(track); }
+        } else if data.is_object() {
+            sanitize_track(data);
         }
-        // ───────────────────────────────────────────────────────────────
-
-        serde_json::from_value::<T>(val["data"].take())
-            .map_err(|e| format!("Error deserializando el payload: {}", e))
     }
 }
