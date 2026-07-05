@@ -1,5 +1,7 @@
+use std::path::Path;
 use tokio::task::JoinSet;
 use tracing::{error, info};
+use crate::lyrics_services::lyrics_client::LyricsClient;
 use crate::model::{Track, TrackResult};
 use crate::repository::TrackRepository;
 use crate::services::{DownloadError, DownloadService, PythonClient};
@@ -34,12 +36,14 @@ pub struct TrackManager {
     pub repo:       TrackRepository,
     downloader: DownloadService,
     python:     PythonClient,
+    lyrics:     LyricsClient,
 }
 
 impl TrackManager {
     pub fn new(repo: TrackRepository, downloader: DownloadService, python: PythonClient) -> Self {
-        Self { repo, downloader, python }
+        Self { repo, downloader, python, lyrics: LyricsClient::new() }
     }
+
 
     // ─── ENDPOINTS DEL DISPATCHER ─────────────────────────────────────────────
 
@@ -225,7 +229,7 @@ impl TrackManager {
         self.repo.insert(&saved_track).await
             .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
 
-        // 3. Fire and Forget: Preparamos el contexto para el hilo de fondo
+        // 3. Fire and Forget: análisis BPM/key (como ya estaba)
         let repo_bg = self.repo.clone();
         let id_bg = saved_track.id.clone();
         let path_bg = path.clone();
@@ -234,7 +238,6 @@ impl TrackManager {
         tokio::spawn(async move {
             info!("Iniciando análisis asíncrono para {}", id_bg);
 
-            // Llamada RPC a tu nuevo endpoint en Python
             match python_bg.call::<serde_json::Value>("analyze_local_file", &path_bg).await {
                 Ok(metadata) => {
                     let bpm = metadata["bpm"].as_i64().map(|v| v as i32);
@@ -250,9 +253,43 @@ impl TrackManager {
             }
         });
 
-        // 4. Retornamos la pista inmediatamente. El análisis ocurrirá en las sombras.
+        let lyrics_client = self.lyrics.clone();
+        let lyrics_id = saved_track.id.clone();
+        let lyrics_title = saved_track.title.clone();
+        let lyrics_artist = saved_track.artists
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| "Desconocido".to_string());
+        let lyrics_duration = saved_track.duration_seconds;
+        let lyrics_path = Path::new(&path).with_extension("lrc");
+
+        tokio::spawn(async move {
+            info!("Buscando letras para {} — {}", lyrics_id, lyrics_title);
+
+            match lyrics_client
+                .find_best_lyrics(&lyrics_title, &lyrics_artist, lyrics_duration)
+                .await
+            {
+                Ok(response) => {
+                    let Some(content) = response.best_content() else {
+                        info!("LRCLIB respondió pero sin contenido usable para {}", lyrics_id);
+                        return;
+                    };
+
+                    match tokio::fs::write(&lyrics_path, content).await {
+                        Ok(()) => info!("Letras guardadas para {}", lyrics_id),
+                        Err(e) => error!("No se pudo escribir .lrc para {}: {}", lyrics_id, e),
+                    }
+                }
+                Err(e) => {
+                    info!("Sin letras en LRCLIB para {} — {}: {}", lyrics_id, lyrics_title, e);
+                }
+            }
+        });
+
         Ok(saved_track)
     }
+
 }
 
 // ─── PARSERS EXTRACCIÓN ───────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ mod managers;
 mod services;
 pub mod api;
 pub mod utils;
+pub mod lyrics_services;
 
 use repository::TrackRepository;
 use crate::infrastructure::init_db_pool;
