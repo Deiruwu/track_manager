@@ -1,6 +1,7 @@
 use std::path::Path;
 use tokio::task::JoinSet;
 use tracing::{error, info};
+use crate::api::server::SearchFilter;
 use crate::lyrics_services::lyrics_client::LyricsClient;
 use crate::model::{Track, TrackResult};
 use crate::repository::TrackRepository;
@@ -87,11 +88,12 @@ impl TrackManager {
 
     /// Acción "search": Múltiples resultados para mostrar menú al usuario.
     /// Recicla el cliente Python en lugar de spawnear `yt-dlp` crudo en Rust.
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<Track>, TrackManagerError> {
+    pub async fn search(&self, query: &str, limit: usize, filter: SearchFilter) -> Result<Vec<Track>, TrackManagerError> {
         let mut tracks: Vec<Track> = self.python.call_with_payload(serde_json::json!({
             "action": "search",
             "query":  query,
             "limit":  limit,
+            "filter": filter, // Gracias a #[serde(rename_all = "lowercase")], pasará como "songs" o "videos"
         })).await.map_err(TrackManagerError::MetadataError)?;
 
         for track in tracks.iter_mut() {

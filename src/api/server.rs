@@ -10,6 +10,19 @@ use crate::managers::TrackManager;
 
 // ── Protocolo ─────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchFilter {
+    Songs,
+    Videos,
+}
+
+impl Default for SearchFilter {
+    fn default() -> Self {
+        Self::Songs
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Request {
     action: String,
@@ -19,6 +32,8 @@ struct Request {
     ids:    Vec<String>,
     #[serde(default = "default_limit")]
     limit:  usize,
+    #[serde(default)] // Si no viene en el JSON, usa SearchFilter::default()
+    filter: SearchFilter,
 }
 
 fn default_limit() -> usize { 15 }
@@ -135,7 +150,8 @@ impl TrackHubServer {
 
             // 2. SEARCH: Devuelve 'limit' resultados de YouTube.
             "search" => {
-                match manager.search(&req.query, req.limit).await {
+                // Pasamos el filtro tipado al manager
+                match manager.search(&req.query, req.limit, req.filter).await {
                     Ok(results) => Response::ok(results),
                     Err(e)      => Response::err(e.to_string()),
                 }
