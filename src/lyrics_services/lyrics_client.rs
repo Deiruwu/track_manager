@@ -1,7 +1,9 @@
 use crate::lyrics_services::lyrics::LrcLibResponse;
+use strsim::jaro_winkler;
 
 const BASE_URL: &str = "https://lrclib.net/api";
 const USER_AGENT: &str = "lyra_track_manager/1.0 (+https://github.com/dei)";
+const MAX_DURATION_DELTA_SECONDS: f64 = 2.0;
 
 #[derive(Debug)]
 pub enum LyricsError {
@@ -35,11 +37,6 @@ impl LyricsClient {
         Self { http }
     }
 
-    /// `/api/get`: matching preciso por título + artista + duración.
-    /// LRCLIB filtra por duración con tolerancia chica (pocos segundos),
-    /// así que puede dar NotFound aunque el registro exista si hay
-    /// diferencia de redondeo entre la duración medida por yt-dlp y la
-    /// que tiene LRCLIB.
     async fn get_by_metadata(
         &self,
         track_name: &str,
@@ -71,25 +68,20 @@ impl LyricsClient {
             .map_err(|e| LyricsError::Network(e.to_string()))
     }
 
-    /// `/api/search`: matching laxo por texto, sin filtro de duración.
-    /// Devuelve el primer resultado si existe.
-    async fn search(&self, track_name: &str, artist_name: Option<&str>) -> Result<LrcLibResponse, LyricsError> {
-        let mut query: Vec<(&str, &str)> = vec![("track_name", track_name)];
-        if let Some(artist) = artist_name {
-            query.push(("artist_name", artist));
-        }
-
+    /// Reemplazo de tu antiguo `search`. Devuelve todos los resultados crudos
+    /// para que el validador estricto los filtre y puntúe.
+    async fn search_fuzzy(&self, query: &[(&str, &str)]) -> Result<Vec<LrcLibResponse>, LyricsError> {
         let resp = self
             .http
             .get(format!("{BASE_URL}/search"))
-            .query(&query)
+            .query(query)
             .send()
             .await
             .map_err(|e| LyricsError::Network(e.to_string()))?
             .error_for_status()
             .map_err(|e| LyricsError::Network(e.to_string()))?;
 
-        let mut results = resp
+        let results = resp
             .json::<Vec<LrcLibResponse>>()
             .await
             .map_err(|e| LyricsError::Network(e.to_string()))?;
@@ -98,44 +90,210 @@ impl LyricsClient {
             return Err(LyricsError::NotFound);
         }
 
-        Ok(results.remove(0))
+        Ok(results)
     }
 
-    /// Estrategia de 3 intentos, de más preciso a más laxo. El primero
-    /// que devuelva contenido usable (best_content() no vacío) gana:
-    ///
-    ///   1. /get   con título + artista principal + duración
-    ///   2. /search con título + artista principal
-    ///   3. /search solo con título
-    ///
-    /// Si los tres fallan, devuelve NotFound — el caller decide qué
-    /// hacer (en track_manager, solo loguear y seguir).
+    /// Estrategia de búsqueda exhaustiva priorizando letras sincronizadas.
+    /// Si encuentra una letra plana válida, no se detiene: la guarda como fallback
+    /// y continúa buscando la versión sincronizada en los endpoints más difusos.
     pub async fn find_best_lyrics(
         &self,
         track_name: &str,
         primary_artist: &str,
         duration_seconds: i32,
     ) -> Result<LrcLibResponse, LyricsError> {
+        let mut fallback_plain: Option<LrcLibResponse> = None;
+
+        // Closure helper: evalúa el mejor candidato válido de un endpoint.
+        // Cortocircuita (retorna Some) SOLO si la letra es sincronizada.
+        // Si es plana, la guarda en fallback y retorna None para que el pipeline siga.
+        let mut process_candidate = |cand_opt: Option<LrcLibResponse>| -> Option<LrcLibResponse> {
+            if let Some(cand) = cand_opt {
+                let has_synced = cand.synced_lyrics.as_deref().is_some_and(|s| !s.trim().is_empty());
+                if has_synced {
+                    return Some(cand);
+                }
+
+                let has_plain = cand.plain_lyrics.as_deref().is_some_and(|s| !s.trim().is_empty());
+                if fallback_plain.is_none() && has_plain {
+                    fallback_plain = Some(cand);
+                }
+            }
+            None
+        };
+
+        // 1. /get exacto
         if let Ok(r) = self.get_by_metadata(track_name, primary_artist, duration_seconds).await {
-            if r.best_content().is_some() {
-                return Ok(r);
+            if let Some(synced) = process_candidate(Some(r)) {
+                return Ok(synced);
             }
         }
 
-        if let Ok(r) = self.search(track_name, Some(primary_artist)).await {
-            if r.best_content().is_some() {
-                return Ok(r);
+        let mut title_candidates = vec![track_name.to_string()];
+
+        let cleaned = clean_title(track_name);
+        if cleaned != track_name && !title_candidates.contains(&cleaned) {
+            title_candidates.push(cleaned);
+        }
+
+        if let Some(cut) = cut_at_metadata_separator(track_name) {
+            if !title_candidates.contains(&cut) {
+                title_candidates.push(cut);
             }
         }
 
-        if let Ok(r) = self.search(track_name, None).await {
-            if r.best_content().is_some() {
-                return Ok(r);
+        // 2. /search por título limpio (Tolerancia a discrepancias en feats/tags de artista)
+        for title in &title_candidates {
+            let query = [("track_name", title.as_str())];
+            if let Ok(results) = self.search_fuzzy(&query).await {
+                let best_match = select_valid_match(results, track_name, duration_seconds);
+                if let Some(synced) = process_candidate(best_match) {
+                    return Ok(synced);
+                }
             }
         }
 
-        Err(LyricsError::NotFound)
+        // 3. /search masivo con q="..." (Para cuando track y artista están revueltos en LRCLIB)
+        for title in &title_candidates {
+            let q_str = format!("{title} {primary_artist}");
+            let query = [("q", q_str.as_str())];
+            if let Ok(results) = self.search_fuzzy(&query).await {
+                let best_match = select_valid_match(results, track_name, duration_seconds);
+                if let Some(synced) = process_candidate(best_match) {
+                    return Ok(synced);
+                }
+            }
+        }
+
+        // 4. Rescate por Artista + Duración + Script Guard (Romaji vs Kanji)
+        if primary_artist.len() >= 3 && primary_artist.to_lowercase() != "desconocido" {
+            let query = [("q", primary_artist)];
+            if let Ok(results) = self.search_fuzzy(&query).await {
+                let best_match = select_by_duration_and_script(results, track_name, duration_seconds);
+                if let Some(synced) = process_candidate(best_match) {
+                    return Ok(synced);
+                }
+            }
+        }
+
+        // Si recorrimos todo el catálogo de variantes y no hubo sincronizada,
+        // devolvemos la plana que hayamos guardado en el camino, si existe.
+        fallback_plain.ok_or(LyricsError::NotFound)
     }
+}
+
+// =====================================================================
+// UTILS & VALIDATORS (Strict Zero False Positives)
+// =====================================================================
+
+fn clean_title(title: &str) -> String {
+    let lower = title.to_lowercase();
+    let markers = ["feat.", "feat ", "ft.", "ft ", "with ", "remix", "live", "acoustic"];
+    let mut cut_at = None;
+
+    for (open, close) in [('(', ')'), ('[', ']')] {
+        let mut search_from = 0;
+        while let Some(rel_open) = lower[search_from..].find(open) {
+            let abs_open = search_from + rel_open;
+            let Some(rel_close) = lower[abs_open..].find(close) else { break };
+            let abs_close = abs_open + rel_close;
+
+            let inner = &lower[abs_open + 1..abs_close];
+            if markers.iter().any(|m| inner.contains(m)) {
+                cut_at = Some(cut_at.map_or(abs_open, |c: usize| c.min(abs_open)));
+            }
+            search_from = abs_close + 1;
+        }
+    }
+
+    match cut_at {
+        Some(idx) => title[..idx].trim_end().to_string(),
+        None => title.trim().to_string(),
+    }
+}
+
+fn cut_at_metadata_separator(title: &str) -> Option<String> {
+    let cut_idx = title.find('/').into_iter().chain(title.find('×')).min()?;
+    let cut = title[..cut_idx].trim();
+    if cut.is_empty() { None } else { Some(cut.to_string()) }
+}
+
+fn has_non_latin_script(s: &str) -> bool {
+    s.chars().any(|c| (c as u32) >= 0x0370)
+}
+
+fn select_valid_match(
+    results: Vec<LrcLibResponse>,
+    expected_title: &str,
+    expected_duration_seconds: i32,
+) -> Option<LrcLibResponse> {
+    let expected_title_lower = expected_title.to_lowercase();
+
+    let mut valid_candidates: Vec<(LrcLibResponse, f64)> = results
+        .into_iter()
+        .filter_map(|cand| {
+            let duration = cand.duration?;
+            let delta = (duration - expected_duration_seconds as f64).abs();
+            if delta > MAX_DURATION_DELTA_SECONDS {
+                return None;
+            }
+
+            let cand_title = cand.track_name.as_deref().unwrap_or("").to_lowercase();
+            let similarity = jaro_winkler(&expected_title_lower, &cand_title);
+
+            if similarity < 0.85 {
+                return None;
+            }
+
+            Some((cand, delta))
+        })
+        .collect();
+
+    // Prioriza letras sincronizadas por sobre las planas dentro de los validos,
+    // y luego desempata por el que tenga el delta de tiempo más cercano a cero.
+    valid_candidates.sort_by(|a, b| {
+        let a_synced = a.0.synced_lyrics.is_some();
+        let b_synced = b.0.synced_lyrics.is_some();
+        b_synced.cmp(&a_synced).then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    valid_candidates.into_iter().map(|(cand, _)| cand).next()
+}
+
+fn select_by_duration_and_script(
+    results: Vec<LrcLibResponse>,
+    expected_title: &str,
+    expected_duration_seconds: i32,
+) -> Option<LrcLibResponse> {
+    let expected_is_non_latin = has_non_latin_script(expected_title);
+
+    let mut valid: Vec<(LrcLibResponse, f64)> = results
+        .into_iter()
+        .filter_map(|cand| {
+            let duration = cand.duration?;
+            let delta = (duration - expected_duration_seconds as f64).abs();
+            if delta > MAX_DURATION_DELTA_SECONDS {
+                return None;
+            }
+
+            let cand_title = cand.track_name.as_deref().unwrap_or("");
+            let cand_is_non_latin = has_non_latin_script(cand_title);
+
+            if expected_is_non_latin == cand_is_non_latin {
+                return None;
+            }
+
+            Some((cand, delta))
+        })
+        .collect();
+
+    valid.sort_by(|a, b| {
+        let a_synced = a.0.synced_lyrics.is_some();
+        let b_synced = b.0.synced_lyrics.is_some();
+        b_synced.cmp(&a_synced).then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    valid.into_iter().map(|(cand, _)| cand).next()
 }
 
 impl Default for LyricsClient {
