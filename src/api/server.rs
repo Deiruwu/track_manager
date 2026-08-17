@@ -30,13 +30,11 @@ struct Request {
     query:  String,
     #[serde(default)]
     ids:    Vec<String>,
-    #[serde(default = "default_limit")]
-    limit:  usize,
+    #[serde(default)]
+    limit:  Option<usize>,
     #[serde(default)] // Si no viene en el JSON, usa SearchFilter::default()
     filter: SearchFilter,
 }
-
-fn default_limit() -> usize { 15 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -151,7 +149,7 @@ impl TrackHubServer {
             // 2. SEARCH: Devuelve 'limit' resultados de YouTube.
             "search" => {
                 // Pasamos el filtro tipado al manager
-                match manager.search(&req.query, req.limit, req.filter).await {
+                match manager.search(&req.query, req.limit.unwrap_or(15), req.filter).await {
                     Ok(results) => Response::ok(results),
                     Err(e)      => Response::err(e.to_string()),
                 }
@@ -174,7 +172,7 @@ impl TrackHubServer {
             }
 
             "radio" => {
-                match manager.radio(&req.query, req.limit).await {
+                match manager.radio(&req.query, req.limit.unwrap_or(15)).await {
                     Ok(results) => Response::ok(results),
                     Err(e)      => Response::err(e.to_string()),
                 }
@@ -184,6 +182,13 @@ impl TrackHubServer {
                 match manager.album(&req.query).await {
                     Ok(results) => Response::ok(results),
                     Err(e)      => Response::err(e.to_string()),
+                }
+            }
+
+            "artist" => {
+                match manager.artist(&req.query, req.limit.unwrap_or(5)).await {
+                    Ok(result) => Response::ok(result),
+                    Err(e)     => Response::err(e.to_string()),
                 }
             }
 

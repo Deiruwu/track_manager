@@ -8,6 +8,7 @@ from repositories.yt.search import YTMusicSearchRepository
 from repositories.yt.track import YTMusicTrackRepository
 from repositories.yt.radio import YTMusicRadioRepository
 from repositories.yt.album import YTMusicAlbumRepository
+from repositories.yt.artist import YTMusicArtistRepository
 
 # Importamos el nuevo servicio analizador
 from services.analyzer import AnalysisService
@@ -30,6 +31,7 @@ class MusicHubServer:
         self.track_repo  = YTMusicTrackRepository(self.yt_client)
         self.radio_repo  = YTMusicRadioRepository(self.yt_client)
         self.album_repo  = YTMusicAlbumRepository(self.yt_client)
+        self.artist_repo = YTMusicArtistRepository(self.yt_client)
 
         # Instanciamos el servicio de análisis
         self.analyzer_service = AnalysisService()
@@ -38,6 +40,7 @@ class MusicHubServer:
             "search": self._handle_search,
             "track":  self._handle_track,
             "album":  self._handle_album,
+            "artist": self._handle_artist,
             "radio":  self._handle_radio,
             "analyze_local_file": self._handle_analyze,
         }
@@ -88,8 +91,13 @@ class MusicHubServer:
         return {"status": "error", "message": "Track no encontrado"}
 
     async def _handle_album(self, payload: dict) -> dict:
-        tracks = await self.album_repo.get_album_tracks(album_id=payload["query"])
-        return {"status": "ok", "data": [t.to_dict() for t in tracks]}
+        album = await self.album_repo.get_album_detail(album_id=payload["query"])
+        return {"status": "ok", "data": album.to_dict()}
+
+    async def _handle_artist(self, payload: dict) -> dict:
+        limit  = int(payload.get("limit", 5))
+        artist = await self.artist_repo.get_artist_overview(artist_id=payload["query"], song_limit=limit)
+        return {"status": "ok", "data": artist.to_dict()}
 
     async def _handle_radio(self, payload: dict) -> dict:
         limit  = int(payload.get("limit", 25))

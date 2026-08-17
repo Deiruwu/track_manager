@@ -3,7 +3,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 use crate::api::server::SearchFilter;
 use crate::lyrics_services::lyrics_client::LyricsClient;
-use crate::model::{Track, TrackResult};
+use crate::model::{AlbumPayload, AlbumResult, ArtistPayload, ArtistResult, Track, TrackResult};
 use crate::repository::TrackRepository;
 use crate::services::{DownloadError, DownloadService, PythonClient};
 
@@ -139,11 +139,40 @@ impl TrackManager {
         Ok(results)
     }
 
-    pub async fn album(&self, album_id: &str) -> Result<Vec<TrackResult>, TrackManagerError> {
-        let tracks: Vec<Track> = self.python.call("album", album_id).await
+    pub async fn album(&self, album_id: &str) -> Result<AlbumResult, TrackManagerError> {
+        let payload: AlbumPayload = self.python.call("album", album_id).await
             .map_err(TrackManagerError::MetadataError)?;
 
-        self.resolve_list(tracks).await
+        let tracks = self.resolve_list(payload.tracks).await?;
+
+        Ok(AlbumResult {
+            id: payload.id,
+            name: payload.name,
+            thumbnail_small: payload.thumbnail_small,
+            thumbnail_large: payload.thumbnail_large,
+            kind: payload.kind,
+            tracks,
+        })
+    }
+
+    pub async fn artist(&self, artist_id: &str, limit: usize) -> Result<ArtistResult, TrackManagerError> {
+        let payload: ArtistPayload = self.python.call_with_payload(serde_json::json!({
+            "action": "artist",
+            "query":  artist_id,
+            "limit":  limit,
+        })).await.map_err(TrackManagerError::MetadataError)?;
+
+        let songs = self.resolve_list(payload.songs).await?;
+
+        Ok(ArtistResult {
+            id: payload.id,
+            name: payload.name,
+            banner: payload.banner,
+            avatar_small: payload.avatar_small,
+            avatar_large: payload.avatar_large,
+            songs,
+            albums: payload.albums,
+        })
     }
 
 
