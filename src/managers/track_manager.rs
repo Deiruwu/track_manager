@@ -129,12 +129,7 @@ impl TrackManager {
         let tracks: Vec<Track> = self.python.call("radio", seed_id).await
             .map_err(TrackManagerError::MetadataError)?;
 
-        let mut results = Vec::with_capacity(tracks.len());
-        for track in tracks {
-            let db = self.db_get(&track.id).await?;
-            results.push(TrackResult::from_track_and_db(track, db));
-        }
-
+        let mut results = self.resolve_list(tracks).await?;
         results.truncate(limit);
         Ok(results)
     }
@@ -151,6 +146,7 @@ impl TrackManager {
             thumbnail_small: payload.thumbnail_small,
             thumbnail_large: payload.thumbnail_large,
             kind: payload.kind,
+            year: payload.year,
             tracks,
         })
     }
@@ -168,8 +164,6 @@ impl TrackManager {
             id: payload.id,
             name: payload.name,
             banner: payload.banner,
-            avatar_small: payload.avatar_small,
-            avatar_large: payload.avatar_large,
             songs,
             albums: payload.albums,
         })
@@ -220,12 +214,18 @@ impl TrackManager {
     // ─── INTERNOS (I/O y Helpers) ─────────────────────────────────────────────
 
     async fn resolve_list(&self, tracks: Vec<Track>) -> Result<Vec<TrackResult>, TrackManagerError> {
-        let mut results = Vec::with_capacity(tracks.len());
+        let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
 
-        for track in tracks {
-            let db = self.db_get(&track.id).await?;
-            results.push(TrackResult::from_track_and_db(track, db));
-        }
+        let found = self.repo.get_many_by_ids(&ids).await
+            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
+
+        let by_id: std::collections::HashMap<&str, &Track> =
+            found.iter().map(|t| (t.id.as_str(), t)).collect();
+
+        let results = tracks.into_iter().map(|track| {
+            let db = by_id.get(track.id.as_str()).map(|&t| t.clone());
+            TrackResult::from_track_and_db(track, db)
+        }).collect();
 
         Ok(results)
     }

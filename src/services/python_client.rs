@@ -82,7 +82,6 @@ impl PythonClient {
         } else if data.is_object() {
             sanitize_track(data);
 
-            // "album" trae los tracks anidados en "tracks", "artist" en "songs".
             for key in ["tracks", "songs"] {
                 if let Some(nested) = data.get_mut(key).and_then(|v| v.as_array_mut()) {
                     for track in nested { sanitize_track(track); }
