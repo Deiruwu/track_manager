@@ -147,6 +147,7 @@ impl TrackManager {
             thumbnail_large: payload.thumbnail_large,
             kind: payload.kind,
             year: payload.year,
+            artists: payload.artists,
             tracks,
         })
     }

@@ -1,8 +1,9 @@
 import asyncio
+from dataclasses import replace
 from ytmusicapi import YTMusic
 from models.track import Track
 from models.album import AlbumStub
-from models.artist import ArtistDetail
+from models.artist import ArtistDetail, ArtistRef
 from repositories.yt._mapper import map_track, best_thumbnails
 
 
@@ -17,7 +18,11 @@ class YTMusicArtistRepository:
         _, banner = best_thumbnails(raw.get('thumbnails', []))
 
         song_results = raw.get('songs', {}).get('results', [])[:song_limit]
-        songs = tuple(map_track(item) for item in song_results)
+        self_ref = ArtistRef(id=artist_id, name=name)
+        songs = tuple(
+            song if song.artists else replace(song, artists=(self_ref,))
+            for song in (map_track(item) for item in song_results)
+        )
 
         albums, singles = await asyncio.gather(
             asyncio.to_thread(self._collect_discography, raw.get('albums'), 'Album'),

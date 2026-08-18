@@ -65,11 +65,19 @@ impl PythonClient {
             }
             track.as_object_mut().map(|o| o.remove("thumbnail"));
 
+            // El nombre solo (p. ej. "jon-YAKITORY") puede ser un canal/uploader
+            // genérico reutilizado por varios artistas reales distintos — hashear
+            // solo por nombre los agruparía como si fueran el mismo artista. Se
+            // combina con el track_id para que cada canción sin resolver tenga su
+            // propia identidad sintética.
+            let track_id = track.get("id").and_then(|v| v.as_str()).map(str::to_string);
+
             if let Some(artists) = track.get_mut("artists").and_then(|a| a.as_array_mut()) {
                 for artist in artists {
-                    if artist["id"].is_null() {
-                        if let Some(name) = artist["name"].as_str() {
-                            let fallback_id = generate_fallback_id("yt_gen", name);
+                    let unresolved = artist["id"].is_null() || artist["id"].as_str() == Some("");
+                    if unresolved {
+                        if let (Some(tid), Some(name)) = (&track_id, artist["name"].as_str()) {
+                            let fallback_id = generate_fallback_id("yt_gen", &format!("{tid}:{name}"));
                             artist["id"] = Value::String(fallback_id);
                         }
                     }

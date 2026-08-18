@@ -20,9 +20,19 @@ class YTMusicAlbumRepository:
         album_thumbnails = raw.get('thumbnails', [])
         small, large = best_thumbnails(album_thumbnails)
 
+        # El listado de tracks de un álbum en ytmusicapi normalmente no repite
+        # los artistas por track (se asume implícito el artista del álbum) —
+        # se usa como fallback cuando el track no trae los suyos propios.
+        album_artists = tuple(
+            ArtistRef(id=a.get('id', ''), name=a.get('name', ''))
+            for a in raw.get('artists', [])
+        )
+        # Campo formal del álbum: solo artistas con id real (navegable).
+        album_artists_with_id = tuple(a for a in album_artists if a.id)
+
         raw_tracks = raw.get('tracks', [])
         tracks = tuple(
-            self._map_album_track(item, album_ref, album_thumbnails)
+            self._map_album_track(item, album_ref, album_thumbnails, album_artists)
             for item in raw_tracks
         )
 
@@ -34,14 +44,20 @@ class YTMusicAlbumRepository:
             album_type=raw.get('type'),
             year=raw.get('year'),
             tracks=tracks,
+            artists=album_artists_with_id,
         )
 
     @staticmethod
-    def _map_album_track(item: dict, album_ref: AlbumRef, album_thumbnails: list) -> Track:
+    def _map_album_track(
+        item: dict,
+        album_ref: AlbumRef,
+        album_thumbnails: list,
+        album_artists: tuple,
+    ) -> Track:
         artists = tuple(
             ArtistRef(id=a.get('id', ''), name=a.get('name', ''))
             for a in item.get('artists', [])
-        )
+        ) or album_artists
         track_thumbnails = item.get('thumbnails') or album_thumbnails
         small, large = best_thumbnails(track_thumbnails)
 

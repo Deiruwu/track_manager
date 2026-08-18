@@ -25,6 +25,7 @@ class AlbumDetail:
     album_type: Optional[str]
     year: Optional[str]
     tracks: tuple
+    artists: tuple = ()
 
     def to_dict(self) -> dict:
         return {
@@ -34,6 +35,7 @@ class AlbumDetail:
             "thumbnail_large": self.thumbnail_large.url if self.thumbnail_large else None,
             "type": self.album_type,
             "year": self.year,
+            "artists": [artist.to_dict() for artist in self.artists],
             "tracks": [track.to_dict() for track in self.tracks],
         }
 

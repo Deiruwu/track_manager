@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::model::{Track, TrackResult};
+use crate::model::{Artist, Track, TrackResult};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlbumPayload {
@@ -10,6 +10,7 @@ pub struct AlbumPayload {
     #[serde(rename = "type")]
     pub kind:            Option<String>,
     pub year:            Option<String>,
+    pub artists:         Vec<Artist>,
     pub tracks:          Vec<Track>,
 }
 
@@ -22,5 +23,6 @@ pub struct AlbumResult {
     #[serde(rename = "type")]
     pub kind:            Option<String>,
     pub year:            Option<String>,
+    pub artists:         Vec<Artist>,
     pub tracks:          Vec<TrackResult>,
 }
