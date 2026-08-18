@@ -54,10 +54,15 @@ class YTMusicAlbumRepository:
         album_thumbnails: list,
         album_artists: tuple,
     ) -> Track:
-        artists = tuple(
+        raw_artists = tuple(
             ArtistRef(id=a.get('id', ''), name=a.get('name', ''))
             for a in item.get('artists', [])
-        ) or album_artists
+        )
+        # No basta con que el array venga vacío: a veces trae una sola entrada
+        # "basura" (id='', name=lista de colaboradores pegada en un string,
+        # tomada del author crudo del video) — si ninguno de los artistas del
+        # track trae un id real, se usa el del álbum.
+        artists = raw_artists if any(a.id for a in raw_artists) else album_artists
         track_thumbnails = item.get('thumbnails') or album_thumbnails
         small, large = best_thumbnails(track_thumbnails)
 

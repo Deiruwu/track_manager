@@ -20,7 +20,7 @@ class YTMusicArtistRepository:
         song_results = raw.get('songs', {}).get('results', [])[:song_limit]
         self_ref = ArtistRef(id=artist_id, name=name)
         songs = tuple(
-            song if song.artists else replace(song, artists=(self_ref,))
+            song if any(a.id for a in song.artists) else replace(song, artists=(self_ref,))
             for song in (map_track(item) for item in song_results)
         )
 
