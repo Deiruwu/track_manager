@@ -3,7 +3,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 use crate::api::server::SearchFilter;
 use crate::lyrics_services::lyrics_client::LyricsClient;
-use crate::model::{AlbumPayload, AlbumResult, ArtistPayload, ArtistResult, Track, TrackResult};
+use crate::model::{Album, AlbumPayload, AlbumResult, Artist, ArtistPayload, ArtistResult, Track, TrackResult};
 use crate::repository::TrackRepository;
 use crate::services::{DownloadError, DownloadService, PythonClient};
 
@@ -138,7 +138,7 @@ impl TrackManager {
         let payload: AlbumPayload = self.python.call("album", album_id).await
             .map_err(TrackManagerError::MetadataError)?;
 
-        let tracks = self.resolve_list(payload.tracks).await?;
+        let tracks = self.resolve_list_normalized(payload.tracks).await?;
 
         Ok(AlbumResult {
             id: payload.id,
@@ -159,7 +159,7 @@ impl TrackManager {
             "limit":  limit,
         })).await.map_err(TrackManagerError::MetadataError)?;
 
-        let songs = self.resolve_list(payload.songs).await?;
+        let songs = self.resolve_list_normalized(payload.songs).await?;
 
         Ok(ArtistResult {
             id: payload.id,
@@ -213,6 +213,33 @@ impl TrackManager {
     }
 
     // ─── INTERNOS (I/O y Helpers) ─────────────────────────────────────────────
+
+    /// Igual que `resolve_list`, pero además sobreescribe `artists`/`album` de
+    /// los tracks ya cacheados (con archivo descargado) con la versión fresca
+    /// de Python. `resolve_list` por sí solo devuelve la fila de BD tal cual
+    /// para esos tracks, que puede traer un artista/álbum sin resolver desde
+    /// antes de que Python empezara a normalizarlos con el contexto del álbum
+    /// o artista consultado. Se usa en `album()` y `artist()`, donde sí existe
+    /// ese contexto de normalización; no en `radio()`, donde no lo hay.
+    async fn resolve_list_normalized(&self, tracks: Vec<Track>) -> Result<Vec<TrackResult>, TrackManagerError> {
+        let fresh_by_id: std::collections::HashMap<String, (Vec<Artist>, Option<Album>)> =
+            tracks.iter()
+                .map(|t| (t.id.clone(), (t.artists.clone(), t.album.clone())))
+                .collect();
+
+        let mut results = self.resolve_list(tracks).await?;
+
+        for result in results.iter_mut() {
+            if let TrackResult::Cached(cached) = result {
+                if let Some((artists, album)) = fresh_by_id.get(&cached.id) {
+                    cached.artists = artists.clone();
+                    cached.album = album.clone();
+                }
+            }
+        }
+
+        Ok(results)
+    }
 
     async fn resolve_list(&self, tracks: Vec<Track>) -> Result<Vec<TrackResult>, TrackManagerError> {
         let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
