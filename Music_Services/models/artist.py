@@ -21,10 +21,29 @@ class ArtistRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtistProfile:
+    """
+    Versión ligera del artista: solo lo necesario para una tarjeta/perfil
+    (id, nombre, foto). Sin banner, canciones ni discografía.
+    """
+    id: str
+    name: str
+    photo: Optional[Thumbnail]
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "photo": self.photo.url if self.photo else None,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ArtistDetail:
     id: str
     name: str
     banner: Optional[Thumbnail]
+    views: Optional[int]
     songs: tuple
     albums: tuple
 
@@ -33,6 +52,7 @@ class ArtistDetail:
             "id": self.id,
             "name": self.name,
             "banner": self.banner.url if self.banner else None,
+            "views": self.views,
             "songs": [song.to_dict() for song in self.songs],
             "albums": [album.to_dict() for album in self.albums],
         }

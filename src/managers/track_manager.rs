@@ -3,7 +3,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 use crate::api::server::SearchFilter;
 use crate::lyrics_services::lyrics_client::LyricsClient;
-use crate::model::{Album, AlbumPayload, AlbumResult, Artist, ArtistPayload, ArtistResult, Track, TrackResult};
+use crate::model::{Album, AlbumPayload, AlbumResult, Artist, ArtistPayload, ArtistProfileResult, ArtistResult, Track, TrackResult};
 use crate::repository::TrackRepository;
 use crate::services::{DownloadError, DownloadService, PythonClient};
 
@@ -152,6 +152,13 @@ impl TrackManager {
         })
     }
 
+    /// Acción "artist_profile": versión ligera del artista (id, nombre, foto),
+    /// una sola llamada a Python — sin canciones ni discografía.
+    pub async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfileResult, TrackManagerError> {
+        self.python.call("artist_profile", artist_id).await
+            .map_err(TrackManagerError::MetadataError)
+    }
+
     pub async fn artist(&self, artist_id: &str, limit: usize) -> Result<ArtistResult, TrackManagerError> {
         let payload: ArtistPayload = self.python.call_with_payload(serde_json::json!({
             "action": "artist",
@@ -161,12 +168,18 @@ impl TrackManager {
 
         let songs = self.resolve_list_normalized(payload.songs).await?;
 
+        // Python ya no ordena la discografía (para evitar la llamada HTTP extra
+        // que cuesta order='Recency' en get_artist_albums) — se ordena acá.
+        let mut albums = payload.albums;
+        albums.sort_by_key(|a| std::cmp::Reverse(album_year_key(&a.year)));
+
         Ok(ArtistResult {
             id: payload.id,
             name: payload.name,
             banner: payload.banner,
+            views: payload.views,
             songs,
-            albums: payload.albums,
+            albums,
         })
     }
 
@@ -226,6 +239,22 @@ impl TrackManager {
             tracks.iter()
                 .map(|t| (t.id.clone(), (t.artists.clone(), t.album.clone())))
                 .collect();
+
+        // Persistimos en background la metadata "fresca" (con contexto de álbum/
+        // artista) que se usa para pisar los tracks cacheados más abajo. Sin esto,
+        // la corrección solo vivía en la respuesta de esta llamada puntual: un
+        // `resolve` posterior sobre el mismo id volvía a leer la fila sin
+        // rehidratar y caía en la búsqueda difusa de Python (fuente de los
+        // resultados "TEMA", sin artist id ni album).
+        let repo_bg = self.repo.clone();
+        let tracks_bg = tracks.clone();
+        tokio::spawn(async move {
+            for track in tracks_bg {
+                if let Err(e) = repo_bg.upsert_track_metadata(&track).await {
+                    error!("No se pudo rehidratar metadata de {}: {}", track.id, e);
+                }
+            }
+        });
 
         let mut results = self.resolve_list(tracks).await?;
 
@@ -352,6 +381,13 @@ impl TrackManager {
 }
 
 // ─── PARSERS EXTRACCIÓN ───────────────────────────────────────────────────────
+
+fn album_year_key(year: &Option<String>) -> i32 {
+    year.as_deref()
+        .filter(|y| !y.is_empty() && y.chars().all(|c| c.is_ascii_digit()))
+        .and_then(|y| y.parse().ok())
+        .unwrap_or(0)
+}
 
 fn extract_video_id(query: &str) -> Option<String> {
     if query.len() == 11 && query.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {

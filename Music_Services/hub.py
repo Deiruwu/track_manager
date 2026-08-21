@@ -41,6 +41,7 @@ class MusicHubServer:
             "track":  self._handle_track,
             "album":  self._handle_album,
             "artist": self._handle_artist,
+            "artist_profile": self._handle_artist_profile,
             "radio":  self._handle_radio,
             "analyze_local_file": self._handle_analyze,
         }
@@ -98,6 +99,10 @@ class MusicHubServer:
         limit  = int(payload.get("limit", 5))
         artist = await self.artist_repo.get_artist_overview(artist_id=payload["query"], song_limit=limit)
         return {"status": "ok", "data": artist.to_dict()}
+
+    async def _handle_artist_profile(self, payload: dict) -> dict:
+        profile = await self.artist_repo.get_artist_profile(artist_id=payload["query"])
+        return {"status": "ok", "data": profile.to_dict()}
 
     async def _handle_radio(self, payload: dict) -> dict:
         limit  = int(payload.get("limit", 25))

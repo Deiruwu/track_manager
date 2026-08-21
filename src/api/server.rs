@@ -192,6 +192,13 @@ impl TrackHubServer {
                 }
             }
 
+            "artist_profile" => {
+                match manager.artist_profile(&req.query).await {
+                    Ok(result) => Response::ok(result),
+                    Err(e)     => Response::err(e.to_string()),
+                }
+            }
+
             "get_all_ids" => {
                 match manager.repo.get_all_ids().await {
                     Ok(ids) => Response::ok(ids),

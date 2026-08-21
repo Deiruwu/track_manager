@@ -295,6 +295,91 @@ impl TrackRepository {
         Ok(())
     }
 
+    /// Actualiza título/álbum/artistas de un track usando datos "de contexto" ya
+    /// confiables (item de álbum/artista), sin necesitar que esté descargado.
+    /// No toca file_path, bpm ni camelot_key — así no pisa el estado de descarga
+    /// ni el análisis ya guardados. Reemplaza por completo las relaciones
+    /// track_artists para no dejar artistas fantasma de una resolución previa
+    /// envenenada (p.ej. un `yt_gen_` fabricado por falta de id real).
+    pub async fn upsert_track_metadata(&self, track: &Track) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await?;
+
+        if let Some(album) = &track.album {
+            sqlx::query!(
+                r#"
+                INSERT INTO albums (id, name)
+                VALUES ($1, $2)
+                ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+                "#,
+                album.id,
+                album.name,
+            )
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        for artist in &track.artists {
+            sqlx::query!(
+                r#"
+                INSERT INTO artists (id, name)
+                VALUES ($1, $2)
+                ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+                "#,
+                artist.id,
+                artist.name,
+            )
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO tracks (
+                uuid, title, duration_seconds,
+                album_id, thumbnail_small, thumbnail_large
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (uuid) DO UPDATE SET
+                title            = EXCLUDED.title,
+                album_id         = EXCLUDED.album_id,
+                thumbnail_small  = EXCLUDED.thumbnail_small,
+                thumbnail_large  = EXCLUDED.thumbnail_large
+            "#,
+            track.id,
+            track.title,
+            track.duration_seconds,
+            track.album.as_ref().map(|a| &a.id),
+            track.thumbnail_small,
+            track.thumbnail_large,
+        )
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query!(
+            "DELETE FROM track_artists WHERE track_uuid = $1",
+            track.id,
+        )
+            .execute(&mut *tx)
+            .await?;
+
+        for artist in &track.artists {
+            sqlx::query!(
+                r#"
+                INSERT INTO track_artists (track_uuid, artist_id)
+                VALUES ($1, $2)
+                ON CONFLICT DO NOTHING
+                "#,
+                track.id,
+                artist.id,
+            )
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn update_played(&self, id: &str) -> Result<(), RepositoryError> {
         sqlx::query!(
         r#"

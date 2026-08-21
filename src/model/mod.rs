@@ -10,6 +10,6 @@ pub use artist::Artist;
 pub use album::Album;
 pub use album_stub::AlbumStub;
 pub use album_result::{AlbumPayload, AlbumResult};
-pub use artist_result::{ArtistPayload, ArtistResult};
+pub use artist_result::{ArtistPayload, ArtistResult, ArtistProfileResult};
 pub use track::Track;
 pub use track_result::TrackResult;

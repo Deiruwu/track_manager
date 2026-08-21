@@ -3,17 +3,33 @@ from dataclasses import replace
 from ytmusicapi import YTMusic
 from models.track import Track
 from models.album import AlbumStub
-from models.artist import ArtistDetail, ArtistRef
+from models.artist import ArtistDetail, ArtistProfile, ArtistRef
 from repositories.yt._mapper import map_track, best_thumbnails
+
+
+def _parse_views(raw: str | None) -> int | None:
+    """'430,148,803 views' -> 430148803. Entero crudo, sin formatear ni
+    abreviar, para que cada consumidor (Rust incluido) decida cómo mostrarlo."""
+    if not raw:
+        return None
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    return int(digits) if digits else None
 
 
 class YTMusicArtistRepository:
     def __init__(self, client: YTMusic):
         self._client = client
 
+    async def get_artist_profile(self, artist_id: str) -> ArtistProfile:
+        """Versión dummy: una sola llamada a get_artist, sin canciones ni discografía."""
+        raw = await asyncio.to_thread(self._client.get_artist, channelId=artist_id)
+        photo, _ = best_thumbnails(raw.get('thumbnails', []))  # small, no el banner grande
+        return ArtistProfile(id=artist_id, name=raw.get('name', ''), photo=photo)
+
     async def get_artist_overview(self, artist_id: str, song_limit: int = 5) -> ArtistDetail:
         raw = await asyncio.to_thread(self._client.get_artist, channelId=artist_id)
         name = raw.get('name', '')
+        views = _parse_views(raw.get('views'))  # entero crudo, p. ej. 430148803
 
         _, banner = best_thumbnails(raw.get('thumbnails', []))
 
@@ -28,12 +44,14 @@ class YTMusicArtistRepository:
             asyncio.to_thread(self._collect_discography, raw.get('albums'), 'Album'),
             asyncio.to_thread(self._collect_discography, raw.get('singles'), 'Single'),
         )
-        discography = tuple(sorted(albums + singles, key=self._year_sort_key, reverse=True))
+        # Sin ordenar: Rust ordena por año al armar ArtistResult (track_manager.rs).
+        discography = albums + singles
 
         return ArtistDetail(
             id=artist_id,
             name=name,
             banner=banner,
+            views=views,
             songs=songs,
             albums=discography,
         )
@@ -45,7 +63,10 @@ class YTMusicArtistRepository:
         browse_id = block.get('browseId')
         params = block.get('params')
         if browse_id and params:
-            items = self._client.get_artist_albums(channelId=browse_id, params=params, order='Recency')
+            # Sin order='Recency': ese parámetro le cuesta a ytmusicapi una
+            # petición HTTP extra (pide el menú de orden, luego reaplica) y
+            # el resultado se reordena de todos modos del lado de Rust.
+            items = self._client.get_artist_albums(channelId=browse_id, params=params)
         else:
             items = block.get('results', [])
 
@@ -62,7 +83,3 @@ class YTMusicArtistRepository:
             album_type=item.get('type') or default_type,
             year=item.get('year'),
         )
-
-    @staticmethod
-    def _year_sort_key(album: AlbumStub) -> int:
-        return int(album.year) if album.year and album.year.isdigit() else 0
