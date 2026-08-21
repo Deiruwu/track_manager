@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO artists (id, name)\n                VALUES ($1, $2)\n                ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "24e6af2b78c967c7d0011a428dde7b7b2b236969848f700e48ca6ba1c6cc5d60"
+}
