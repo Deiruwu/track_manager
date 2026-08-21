@@ -13,6 +13,15 @@ impl TrackRepository {
         Self { pool }
     }
 
+    /// Ignora rutas que se sabe que no son audio (el .lrc que se coló en
+    /// file_path por el bug ya corregido en DownloadService::find_file) — se
+    /// trata como si la pista no tuviera archivo, así que `download_track`
+    /// la vuelve a resolver. No se exige una extensión de audio específica:
+    /// la librería puede tener pistas en .opus, .flac, .m4a, etc.
+    fn valid_audio_path(path: Option<String>) -> Option<String> {
+        path.filter(|p| !p.ends_with(".lrc"))
+    }
+
     // ── Lectura ───────────────────────────────────────────────────────────────
 
     /// Busca un track por su ID, resolviendo álbum y artistas en el mismo viaje.
@@ -61,7 +70,7 @@ impl TrackRepository {
             thumbnail_large:  row.thumbnail_large,
             bpm:              row.bpm,
             camelot_key:      row.camelot_key,
-            file_path:        row.file_path,
+            file_path:        Self::valid_audio_path(row.file_path),
             added_at:         row.added_at,
             album,
             artists,
@@ -108,7 +117,7 @@ impl TrackRepository {
                 thumbnail_large:  row.thumbnail_large,
                 bpm:              row.bpm,
                 camelot_key:      row.camelot_key,
-                file_path:        row.file_path,
+                file_path:        Self::valid_audio_path(row.file_path),
                 added_at:         row.added_at,
                 album,
                 artists,
@@ -194,7 +203,7 @@ impl TrackRepository {
                     thumbnail_large:  row.thumbnail_large,
                     bpm:              row.bpm,
                     camelot_key:      row.camelot_key,
-                    file_path:        row.file_path,
+                    file_path:        Self::valid_audio_path(row.file_path),
                     added_at:         row.added_at,
                     album,
                     artists,
@@ -414,13 +423,22 @@ impl TrackRepository {
         let track = self.get_by_id(uuid).await?
             .ok_or_else(|| RepositoryError::Custom(format!("Track {} no encontrado", uuid)))?;
 
-        // 2. Borrado físico
+        // 2. Borrado físico (audio + letra asociada)
         if let Some(file_path) = track.file_path {
             match tokio::fs::remove_file(&file_path).await {
                 Ok(_) => info!("Archivo físico eliminado: {}", file_path),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     info!("El archivo físico ya no existía: {}", file_path);
                 }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+
+            let lyrics_path = std::path::Path::new(&file_path).with_extension("lrc");
+            match tokio::fs::remove_file(&lyrics_path).await {
+                Ok(_) => info!("Letra eliminada: {}", lyrics_path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     return Err(e.into());
                 }

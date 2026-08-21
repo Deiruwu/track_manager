@@ -73,11 +73,14 @@ impl DownloadService {
     }
 
     async fn find_file(&self, video_id: &str) -> Result<String, DownloadError> {
-        let mut entries = tokio::fs::read_dir(&self.cache_dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            if entry.file_name().to_string_lossy().starts_with(video_id) {
-                return Ok(entry.path().to_string_lossy().to_string());
-            }
+        // `download()` siempre fuerza --audio-format opus, así que el archivo
+        // de salida es determinístico. Antes esto escaneaba el directorio
+        // buscando cualquier nombre que empezara con `video_id`, y podía
+        // devolver el .lrc de letras (mismo prefijo, escrito por separado en
+        // background) en vez del .opus si `read_dir` los listaba en ese orden.
+        let path = self.cache_dir.join(format!("{video_id}.opus"));
+        if tokio::fs::try_exists(&path).await? {
+            return Ok(path.to_string_lossy().to_string());
         }
         Err(DownloadError::FileNotFound(video_id.to_string()))
     }
