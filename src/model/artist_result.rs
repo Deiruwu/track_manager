@@ -26,9 +26,11 @@ pub struct ArtistResult {
 
 /// Versión "dummy" del artista: solo id, nombre y foto de perfil — sin banner,
 /// canciones ni discografía. Pass-through directo del payload de Python.
+/// Mismos tamaños que Album usa para sus thumbnails.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ArtistProfileResult {
-    pub id:    String,
-    pub name:  String,
-    pub photo: Option<String>,
+    pub id:              String,
+    pub name:            String,
+    pub thumbnail_small: Option<String>,
+    pub thumbnail_large: Option<String>,
 }

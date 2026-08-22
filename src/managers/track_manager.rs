@@ -1,11 +1,12 @@
 use std::path::Path;
+use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tracing::{error, info};
 use crate::api::server::SearchFilter;
 use crate::lyrics_services::lyrics_client::LyricsClient;
 use crate::model::{Album, AlbumPayload, AlbumResult, Artist, ArtistPayload, ArtistProfileResult, ArtistResult, Track, TrackResult};
 use crate::repository::TrackRepository;
-use crate::services::{DownloadError, DownloadService, PythonClient};
+use crate::services::{DownloadError, DownloadService, DownloadEvent, PythonClient};
 
 #[derive(Debug)]
 pub enum TrackManagerError {
@@ -38,11 +39,23 @@ pub struct TrackManager {
     downloader: DownloadService,
     python:     PythonClient,
     lyrics:     LyricsClient,
+    events:     broadcast::Sender<DownloadEvent>,
 }
 
 impl TrackManager {
-    pub fn new(repo: TrackRepository, downloader: DownloadService, python: PythonClient) -> Self {
-        Self { repo, downloader, python, lyrics: LyricsClient::new() }
+    pub fn new(
+        repo: TrackRepository,
+        downloader: DownloadService,
+        python: PythonClient,
+        events: broadcast::Sender<DownloadEvent>,
+    ) -> Self {
+        Self { repo, downloader, python, lyrics: LyricsClient::new(), events }
+    }
+
+    /// Nueva conexión a los eventos de progreso de descarga — usado por la
+    /// acción "subscribe" del servidor TCP.
+    pub fn subscribe_downloads(&self) -> broadcast::Receiver<DownloadEvent> {
+        self.events.subscribe()
     }
 
 
@@ -152,8 +165,8 @@ impl TrackManager {
         })
     }
 
-    /// Acción "artist_profile": versión ligera del artista (id, nombre, foto),
-    /// una sola llamada a Python — sin canciones ni discografía.
+    /// Acción "artist_profile": versión ligera del artista (id, nombre,
+    /// thumbnail_small/large), una sola llamada a Python — sin canciones ni discografía.
     pub async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfileResult, TrackManagerError> {
         self.python.call("artist_profile", artist_id).await
             .map_err(TrackManagerError::MetadataError)
@@ -310,12 +323,28 @@ impl TrackManager {
 
     async fn download_and_save(&self, track: Track) -> Result<Track, TrackManagerError> {
         // 1. Descarga del audio (Bloquea esta request, pero no el servidor TCP)
-        let path = self.downloader.download(&track).await?;
+        let path = match self.downloader.download(&track).await {
+            Ok(path) => path,
+            Err(e) => {
+                let _ = self.events.send(DownloadEvent::Failed {
+                    id: track.id.clone(),
+                    message: e.to_string(),
+                });
+                return Err(e.into());
+            }
+        };
         let saved_track = Track { file_path: Some(path.clone()), ..track };
 
         // 2. Persistencia inicial en DB
-        self.repo.insert(&saved_track).await
-            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
+        if let Err(e) = self.repo.insert(&saved_track).await {
+            let _ = self.events.send(DownloadEvent::Failed {
+                id: saved_track.id.clone(),
+                message: e.to_string(),
+            });
+            return Err(TrackManagerError::DatabaseError(e.to_string()));
+        }
+
+        let _ = self.events.send(DownloadEvent::Finished { id: saved_track.id.clone() });
 
         // 3. Fire and Forget: análisis BPM/key (como ya estaba)
         let repo_bg = self.repo.clone();

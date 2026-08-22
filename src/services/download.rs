@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::process::Stdio;
+use serde::Deserialize;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::broadcast;
 use crate::model::Track;
+use crate::services::events::DownloadEvent;
 
 #[derive(Debug)]
 pub enum DownloadError {
@@ -26,14 +30,30 @@ impl From<std::io::Error> for DownloadError {
     fn from(e: std::io::Error) -> Self { DownloadError::IoError(e) }
 }
 
+/// Forma tolerante del dict de progreso de yt-dlp (`%(progress)j`). No es un
+/// contrato público estable de yt-dlp — todos los campos son opcionales para
+/// que un cambio de formato en una futura versión no tumbe la descarga, solo
+/// deje de publicar ese tick puntual.
+#[derive(Debug, Deserialize, Default)]
+struct YtDlpProgress {
+    status:           Option<String>,
+    downloaded_bytes: Option<f64>,
+    total_bytes:      Option<f64>,
+    #[serde(default)]
+    total_bytes_estimate: Option<f64>,
+    speed:            Option<f64>,
+    eta:              Option<f64>,
+}
+
 #[derive(Clone)]
 pub struct DownloadService {
     cache_dir: PathBuf,
+    events:    broadcast::Sender<DownloadEvent>,
 }
 
 impl DownloadService {
-    pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
-        Self { cache_dir: cache_dir.into() }
+    pub fn new(cache_dir: impl Into<PathBuf>, events: broadcast::Sender<DownloadEvent>) -> Self {
+        Self { cache_dir: cache_dir.into(), events }
     }
 
     pub async fn download(&self, track: &Track) -> Result<String, DownloadError> {
@@ -46,23 +66,63 @@ impl DownloadService {
 
         let url = format!("https://www.youtube.com/watch?v={}", track.id);
 
-        let output = Command::new("yt-dlp")
+        let mut child = Command::new("yt-dlp")
             .args([
                 "-f", "ba[ext=webm]/ba[ext=opus]/ba",
                 "-x",
                 "--audio-format", "opus",
                 "-r", "3M",
                 "-o", &output_template,
+                "--newline",
+                "--progress-template", "download:%(progress)j",
                 &url,
             ])
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
-            .await?;
+            .spawn()?;
 
-        if !output.status.success() {
-            let err_msg = String::from_utf8_lossy(&output.stderr);
-            let clean_err = err_msg.lines()
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+
+        let track_id = track.id.clone();
+        let events = self.events.clone();
+        let stdout_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let Some(json_part) = line.strip_prefix("download:") else { continue };
+                let Ok(progress) = serde_json::from_str::<YtDlpProgress>(json_part) else { continue };
+                if progress.status.as_deref() != Some("downloading") {
+                    continue;
+                }
+
+                let _ = events.send(DownloadEvent::Downloading {
+                    id: track_id.clone(),
+                    downloaded_bytes: progress.downloaded_bytes.map(|b| b as u64),
+                    total_bytes: progress.total_bytes
+                        .or(progress.total_bytes_estimate)
+                        .map(|b| b as u64),
+                    speed_bytes_per_sec: progress.speed,
+                    eta_seconds: progress.eta.map(|e| e as u64),
+                });
+            }
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            let mut buf = String::new();
+            while let Ok(Some(line)) = lines.next_line().await {
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+            buf
+        });
+
+        let status = child.wait().await?;
+        let _ = stdout_task.await;
+        let stderr_output = stderr_task.await.unwrap_or_default();
+
+        if !status.success() {
+            let clean_err = stderr_output.lines()
                 .find(|l| l.contains("ERROR:"))
                 .unwrap_or("Error desconocido de yt-dlp");
 

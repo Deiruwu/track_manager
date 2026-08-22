@@ -16,6 +16,8 @@ use crate::api::TrackHubServer;
 use crate::managers::TrackManager;
 use crate::services::{DownloadService, PythonClient, PythonMicroservice};
 
+const DOWNLOAD_EVENTS_CAPACITY: usize = 256;
+
 
 #[tokio::main]
 async fn main() {
@@ -49,7 +51,8 @@ async fn main() {
     let music_storage = std::env::var("MUSIC_STORAGE_PATH")
         .expect("MUSIC_STORAGE_PATH no definida en .env");
 
-    let download_service = DownloadService::new(PathBuf::from(music_storage));
+    let (download_events_tx, _) = tokio::sync::broadcast::channel(DOWNLOAD_EVENTS_CAPACITY);
+    let download_service = DownloadService::new(PathBuf::from(music_storage), download_events_tx.clone());
 
 
     let server_host = std::env::var("SERVER_HOST")
@@ -72,7 +75,7 @@ async fn main() {
     let python_client = PythonClient::new(python_host, python_port);
 
     let track_repo = TrackRepository::new(pool.clone());
-    let track_manager = TrackManager::new(track_repo.clone(), download_service, python_client);
+    let track_manager = TrackManager::new(track_repo.clone(), download_service, python_client, download_events_tx);
 
     println!("Conexión a music_center establecida. Repo listo.");
 

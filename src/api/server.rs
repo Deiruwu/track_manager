@@ -100,16 +100,58 @@ impl TrackHubServer {
             let line = line.trim().to_string();
             if line.is_empty() { continue; }
 
-
-            let response = match serde_json::from_str::<Request>(&line) {
-                Err(e)  => Response::err(format!("JSON inválido: {e}")),
-                Ok(req) => Self::dispatch(req, &manager).await,
+            let req = match serde_json::from_str::<Request>(&line) {
+                Err(e) => {
+                    let response = Response::err(format!("JSON inválido: {e}"));
+                    let json = serde_json::to_string(&response).unwrap();
+                    writer.write_all(format!("{json}\n").as_bytes()).await?;
+                    continue;
+                }
+                Ok(req) => req,
             };
 
+            // SUBSCRIBE: a diferencia de las demás acciones, no responde una
+            // sola vez — deja esta conexión dedicada a empujar eventos de
+            // descarga hasta que el cliente se desconecte. No vuelve a leer
+            // más líneas de esta conexión.
+            if req.action == "subscribe" {
+                return Self::stream_download_events(writer, &manager).await;
+            }
+
+            let response = Self::dispatch(req, &manager).await;
             let json = serde_json::to_string(&response).unwrap();
 
-
             writer.write_all(format!("{json}\n").as_bytes()).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn stream_download_events(
+        mut writer: tokio::net::tcp::OwnedWriteHalf,
+        manager: &TrackManager,
+    ) -> std::io::Result<()> {
+        let mut rx = manager.subscribe_downloads();
+
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    // DownloadEvent ya serializa con "state"/"id"/etc. a nivel
+                    // plano (enum internamente tagueado) — se le agregan
+                    // "status"/"event" al mismo nivel en vez de anidar.
+                    let mut value = serde_json::to_value(&event).unwrap();
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("status".into(), serde_json::json!("event"));
+                        obj.insert("event".into(), serde_json::json!("download"));
+                    }
+
+                    if writer.write_all(format!("{value}\n").as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
         }
 
         Ok(())
