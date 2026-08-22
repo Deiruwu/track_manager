@@ -1,10 +1,14 @@
 import asyncio
+import re
 from dataclasses import replace
 from ytmusicapi import YTMusic
+from models.shared import Thumbnail
 from models.track import Track
 from models.album import AlbumStub
 from models.artist import ArtistDetail, ArtistProfile, ArtistRef
 from repositories.yt._mapper import map_track, best_thumbnails
+
+_SIZE_SUFFIX = re.compile(r'=w\d+-h\d+')
 
 
 def _parse_views(raw: str | None) -> int | None:
@@ -16,6 +20,19 @@ def _parse_views(raw: str | None) -> int | None:
     return int(digits) if digits else None
 
 
+def _square_crop(banner: Thumbnail | None, size: int) -> Thumbnail | None:
+    """get_artist() solo trae recortes panorámicos del banner (nunca uno
+    cuadrado) — pero es la misma imagen que sirve el thumbnail cuadrado que
+    devuelve search(filter="artists"), solo que con otro tamaño en la URL
+    (mismo host, mismo hash, cambia únicamente '=wN-hN'). Reescribimos esa
+    parte para pedir el recorte cuadrado que haga falta, sin llamada de red
+    extra. Verificado en vivo: el CDN respeta cualquier tamaño pedido."""
+    if not banner or not _SIZE_SUFFIX.search(banner.url):
+        return None
+    url = _SIZE_SUFFIX.sub(f'=w{size}-h{size}', banner.url, count=1)
+    return Thumbnail(url=url, width=size, height=size)
+
+
 class YTMusicArtistRepository:
     def __init__(self, client: YTMusic):
         self._client = client
@@ -23,8 +40,16 @@ class YTMusicArtistRepository:
     async def get_artist_profile(self, artist_id: str) -> ArtistProfile:
         """Versión dummy: una sola llamada a get_artist, sin canciones ni discografía."""
         raw = await asyncio.to_thread(self._client.get_artist, channelId=artist_id)
-        photo, _ = best_thumbnails(raw.get('thumbnails', []))  # small, no el banner grande
-        return ArtistProfile(id=artist_id, name=raw.get('name', ''), photo=photo)
+        _, banner = best_thumbnails(raw.get('thumbnails', []))
+        # Mismos tamaños que usa Album (models/album.py) para thumbnail_small/large.
+        thumbnail_small = _square_crop(banner, 120)
+        thumbnail_large = _square_crop(banner, 544)
+        return ArtistProfile(
+            id=artist_id,
+            name=raw.get('name', ''),
+            thumbnail_small=thumbnail_small,
+            thumbnail_large=thumbnail_large,
+        )
 
     async def get_artist_overview(self, artist_id: str, song_limit: int = 5) -> ArtistDetail:
         raw = await asyncio.to_thread(self._client.get_artist, channelId=artist_id)

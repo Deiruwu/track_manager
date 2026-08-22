@@ -28,13 +28,15 @@ class ArtistProfile:
     """
     id: str
     name: str
-    photo: Optional[Thumbnail]
+    thumbnail_small: Optional[Thumbnail]
+    thumbnail_large: Optional[Thumbnail]
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
             "name": self.name,
-            "photo": self.photo.url if self.photo else None,
+            "thumbnail_small": self.thumbnail_small.url if self.thumbnail_small else None,
+            "thumbnail_large": self.thumbnail_large.url if self.thumbnail_large else None,
         }
 
 
