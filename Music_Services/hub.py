@@ -128,7 +128,7 @@ class MusicHubServer:
             return {"status": "error", "message": "JSON invalido"}
         except Exception as e:
             logging.error(f"Error procesando comando: {e}")
-            return {"status": "error", "message": "Error interno del servidor de metadatos"}
+            return {"status": "error", "message": f"Error interno del servidor de metadatos: {e}"}
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info('peername')

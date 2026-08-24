@@ -1,14 +1,10 @@
 import asyncio
-import re
 from dataclasses import replace
 from ytmusicapi import YTMusic
-from models.shared import Thumbnail
 from models.track import Track
 from models.album import AlbumStub
 from models.artist import ArtistDetail, ArtistProfile, ArtistRef
 from repositories.yt._mapper import map_track, best_thumbnails
-
-_SIZE_SUFFIX = re.compile(r'=w\d+-h\d+')
 
 
 def _parse_views(raw: str | None) -> int | None:
@@ -20,30 +16,29 @@ def _parse_views(raw: str | None) -> int | None:
     return int(digits) if digits else None
 
 
-def _square_crop(banner: Thumbnail | None, size: int) -> Thumbnail | None:
-    """get_artist() solo trae recortes panorámicos del banner (nunca uno
-    cuadrado) — pero es la misma imagen que sirve el thumbnail cuadrado que
-    devuelve search(filter="artists"), solo que con otro tamaño en la URL
-    (mismo host, mismo hash, cambia únicamente '=wN-hN'). Reescribimos esa
-    parte para pedir el recorte cuadrado que haga falta, sin llamada de red
-    extra. Verificado en vivo: el CDN respeta cualquier tamaño pedido."""
-    if not banner or not _SIZE_SUFFIX.search(banner.url):
-        return None
-    url = _SIZE_SUFFIX.sub(f'=w{size}-h{size}', banner.url, count=1)
-    return Thumbnail(url=url, width=size, height=size)
-
-
 class YTMusicArtistRepository:
     def __init__(self, client: YTMusic):
         self._client = client
 
+    async def _fetch_artist(self, artist_id: str) -> dict:
+        try:
+            return await asyncio.to_thread(self._client.get_artist, channelId=artist_id)
+        except KeyError as e:
+            # ytmusicapi solo sabe parsear el header "inmersivo" que usan los
+            # artistas musicales canónicos de YT Music. Un channelId de un
+            # canal normal de YouTube (no registrado como Music Artist) trae
+            # otro tipo de header (musicVisualHeaderRenderer) y la librería
+            # revienta con KeyError en vez de devolver algo manejable.
+            raise ValueError(
+                f"El canal '{artist_id}' no tiene un perfil de artista musical "
+                f"en YouTube Music (falta {e} en la respuesta)"
+            ) from e
+
     async def get_artist_profile(self, artist_id: str) -> ArtistProfile:
         """Versión dummy: una sola llamada a get_artist, sin canciones ni discografía."""
-        raw = await asyncio.to_thread(self._client.get_artist, channelId=artist_id)
-        _, banner = best_thumbnails(raw.get('thumbnails', []))
+        raw = await self._fetch_artist(artist_id)
         # Mismos tamaños que usa Album (models/album.py) para thumbnail_small/large.
-        thumbnail_small = _square_crop(banner, 120)
-        thumbnail_large = _square_crop(banner, 544)
+        thumbnail_small, thumbnail_large = best_thumbnails(raw.get('thumbnails', []))
         return ArtistProfile(
             id=artist_id,
             name=raw.get('name', ''),
@@ -52,11 +47,12 @@ class YTMusicArtistRepository:
         )
 
     async def get_artist_overview(self, artist_id: str, song_limit: int = 5) -> ArtistDetail:
-        raw = await asyncio.to_thread(self._client.get_artist, channelId=artist_id)
+        raw = await self._fetch_artist(artist_id)
         name = raw.get('name', '')
         views = _parse_views(raw.get('views'))  # entero crudo, p. ej. 430148803
 
-        _, banner = best_thumbnails(raw.get('thumbnails', []))
+        # sizes=None: el banner es panorámico, no debe forzarse a cuadrado.
+        _, banner = best_thumbnails(raw.get('thumbnails', []), sizes=None)
 
         song_results = raw.get('songs', {}).get('results', [])[:song_limit]
         self_ref = ArtistRef(id=artist_id, name=name)

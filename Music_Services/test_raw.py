@@ -5,7 +5,10 @@ from ytmusicapi import YTMusic
 
 yt = YTMusic()
 
-query = "MPREb_cHM5wZeVqf7"
+query = "UCSMsV0YVTmlh_XpkCFW3Xmw"
+query_browser = "MPREb_YU2ompWY08Z"
+query_playlist = "OLAK5uy_nWs6TJFLL9wIhnSN9GChSvHd-2w84q7UU"
+
 '''
 artists: [
     {
@@ -20,7 +23,7 @@ artists: [
 '''
 
 start = time.perf_counter()
-results = yt.get_album(query)
+results = yt.get_artist("UCjRlhZ0KDtPQa6yHMoXM3hA")
 end = time.perf_counter()
 print(f"[TIME] search songs: {end - start:.4f}s\n")
 
