@@ -328,6 +328,8 @@ impl TrackManager {
             Err(e) => {
                 let _ = self.events.send(DownloadEvent::Failed {
                     id: track.id.clone(),
+                    title: track.title.clone(),
+                    thumbnail_small: track.thumbnail_small.clone(),
                     message: e.to_string(),
                 });
                 return Err(e.into());
@@ -339,21 +341,35 @@ impl TrackManager {
         if let Err(e) = self.repo.insert(&saved_track).await {
             let _ = self.events.send(DownloadEvent::Failed {
                 id: saved_track.id.clone(),
+                title: saved_track.title.clone(),
+                thumbnail_small: saved_track.thumbnail_small.clone(),
                 message: e.to_string(),
             });
             return Err(TrackManagerError::DatabaseError(e.to_string()));
         }
 
-        let _ = self.events.send(DownloadEvent::Finished { id: saved_track.id.clone() });
+        let _ = self.events.send(DownloadEvent::Finished {
+            id: saved_track.id.clone(),
+            title: saved_track.title.clone(),
+            thumbnail_small: saved_track.thumbnail_small.clone(),
+        });
 
         // 3. Fire and Forget: análisis BPM/key (como ya estaba)
         let repo_bg = self.repo.clone();
         let id_bg = saved_track.id.clone();
         let path_bg = path.clone();
         let python_bg = self.python.clone();
+        let events_bg = self.events.clone();
+        let track_bg = saved_track.clone();
 
         tokio::spawn(async move {
             info!("Iniciando análisis asíncrono para {}", id_bg);
+
+            let _ = events_bg.send(DownloadEvent::AnalyzeStarted {
+                id:              track_bg.id.clone(),
+                title:           track_bg.title.clone(),
+                thumbnail_small: track_bg.thumbnail_small.clone(),
+            });
 
             match python_bg.call::<serde_json::Value>("analyze_local_file", &path_bg).await {
                 Ok(metadata) => {
@@ -364,6 +380,9 @@ impl TrackManager {
                         error!("Fallo SQL al guardar análisis para {}: {}", id_bg, e);
                     } else {
                         info!("Análisis persistido para {}: BPM={:?}, Key={:?}", id_bg, bpm, camelot);
+
+                        let analyzed_track = Track { bpm, camelot_key: camelot, ..track_bg };
+                        let _ = events_bg.send(DownloadEvent::AnalyzeFinished { track: analyzed_track });
                     }
                 }
                 Err(e) => error!("Fallo RPC hacia el analizador en Python para {}: {}", id_bg, e),

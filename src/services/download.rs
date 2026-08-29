@@ -84,7 +84,18 @@ impl DownloadService {
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
 
+        // yt-dlp ya está corriendo (el spawn no falló), aunque todavía no haya
+        // bajado un solo byte — puede tardar en resolver formatos antes de que
+        // llegue el primer tick de progreso real.
+        let _ = self.events.send(DownloadEvent::Requested {
+            id:              track.id.clone(),
+            title:           track.title.clone(),
+            thumbnail_small: track.thumbnail_small.clone(),
+        });
+
         let track_id = track.id.clone();
+        let track_title = track.title.clone();
+        let track_thumbnail = track.thumbnail_small.clone();
         let events = self.events.clone();
         let stdout_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -96,6 +107,8 @@ impl DownloadService {
 
                 let _ = events.send(DownloadEvent::Downloading {
                     id: track_id.clone(),
+                    title: track_title.clone(),
+                    thumbnail_small: track_thumbnail.clone(),
                     downloaded_bytes: progress.downloaded_bytes.map(|b| b as u64),
                     total_bytes: progress.total_bytes
                         .or(progress.total_bytes_estimate)
