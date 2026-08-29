@@ -89,8 +89,7 @@ impl DownloadService {
         let stdout_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let Some(json_part) = line.strip_prefix("download:") else { continue };
-                let Ok(progress) = serde_json::from_str::<YtDlpProgress>(json_part) else { continue };
+                let Ok(progress) = serde_json::from_str::<YtDlpProgress>(&line) else { continue };
                 if progress.status.as_deref() != Some("downloading") {
                     continue;
                 }
