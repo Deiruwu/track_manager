@@ -159,15 +159,35 @@ impl TrackManager {
     }
 
     /// Acción "refresh_metadata": vuelve a pedir título/artistas/álbum/portadas
-    /// a Python y los reescribe en BD, sin tocar archivo ni análisis.
+    /// a Python y los reescribe en BD, sin tocar archivo ni análisis. Publica
+    /// `MetadataUpdated`/`MetadataFailed`.
     pub async fn refresh_metadata(&self, query: &str) -> Result<Track, TrackManagerError> {
         let id = extract_video_id(query).unwrap_or_else(|| query.trim().to_string());
-        let fresh = self.python_get_by_id(&id).await?;
+        let result = self.rewrite_metadata(&id).await;
 
-        self.repo.upsert_track_metadata(&fresh).await
-            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
+        let event = match &result {
+            Ok(track) => DownloadEvent::MetadataUpdated { track: track.clone() },
+            Err(e) => {
+                let known = self.db_get(&id).await.ok().flatten();
+                DownloadEvent::MetadataFailed {
+                    title:           known.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| id.clone()),
+                    thumbnail_small: known.and_then(|t| t.thumbnail_small),
+                    id,
+                    message:         e.to_string(),
+                }
+            }
+        };
+        let _ = self.events.send(event);
 
-        Ok(self.db_get(&id).await?.unwrap_or(fresh))
+        result
+    }
+
+    /// Acción "refresh_lyrics": vuelve a buscar la letra de un track ya
+    /// descargado. Publica `LyricsFound`/`LyricsNotFound`.
+    pub async fn refresh_lyrics(&self, query: &str) -> Result<Track, TrackManagerError> {
+        let track = self.get_local_track(query).await?;
+        fetch_and_store_lyrics(&self.lyrics, &self.events, &track).await;
+        Ok(track)
     }
 
     /// Acción "reanalyze": vuelve a calcular BPM/key de un track ya descargado.
@@ -360,6 +380,16 @@ impl TrackManager {
             .ok_or(TrackManagerError::NoResults)
     }
 
+    /// Pide el track fresco a Python y lo reescribe en BD; devuelve la fila resultante.
+    async fn rewrite_metadata(&self, id: &str) -> Result<Track, TrackManagerError> {
+        let fresh = self.python_get_by_id(id).await?;
+
+        self.repo.upsert_track_metadata(&fresh).await
+            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(self.db_get(id).await?.unwrap_or(fresh))
+    }
+
     async fn python_get_by_id(&self, id: &str) -> Result<Track, TrackManagerError> {
         let track: Track = self.python.call("track", id).await
             .map_err(TrackManagerError::MetadataError)?;
@@ -410,38 +440,12 @@ impl TrackManager {
             let _ = analyze_and_persist(&repo_bg, &python_bg, &events_bg, track_bg).await;
         });
 
-        let lyrics_client = self.lyrics.clone();
-        let lyrics_id = saved_track.id.clone();
-        let lyrics_title = saved_track.title.clone();
-        let lyrics_artist = saved_track.artists
-            .first()
-            .map(|a| a.name.clone())
-            .unwrap_or_else(|| "Desconocido".to_string());
-        let lyrics_duration = saved_track.duration_seconds;
-        let lyrics_path = Path::new(&path).with_extension("lrc");
+        let lyrics_bg = self.lyrics.clone();
+        let events_bg = self.events.clone();
+        let track_bg = saved_track.clone();
 
         tokio::spawn(async move {
-            info!("Buscando letras para {} — {}", lyrics_id, lyrics_title);
-
-            match lyrics_client
-                .find_best_lyrics(&lyrics_title, &lyrics_artist, lyrics_duration)
-                .await
-            {
-                Ok(response) => {
-                    let Some(content) = response.best_content() else {
-                        info!("LRCLIB respondió pero sin contenido usable para {}", lyrics_id);
-                        return;
-                    };
-
-                    match tokio::fs::write(&lyrics_path, content).await {
-                        Ok(()) => info!("Letras guardadas para {}", lyrics_id),
-                        Err(e) => error!("No se pudo escribir .lrc para {}: {}", lyrics_id, e),
-                    }
-                }
-                Err(e) => {
-                    info!("Sin letras en LRCLIB para {} — {}: {}", lyrics_id, lyrics_title, e);
-                }
-            }
+            fetch_and_store_lyrics(&lyrics_bg, &events_bg, &track_bg).await;
         });
 
         Ok(saved_track)
@@ -450,7 +454,7 @@ impl TrackManager {
 }
 
 /// Analiza BPM/key del archivo del track en Python, lo persiste y publica
-/// `AnalyzeStarted`/`AnalyzeFinished`. Devuelve el track ya analizado.
+/// `AnalyzeStarted` y luego `AnalyzeFinished`/`AnalyzeFailed`. Devuelve el track ya analizado.
 async fn analyze_and_persist(
     repo: &TrackRepository,
     python: &PythonClient,
@@ -469,25 +473,91 @@ async fn analyze_and_persist(
         thumbnail_small: track.thumbnail_small.clone(),
     });
 
-    let metadata = python.call::<serde_json::Value>("analyze_local_file", &path).await.map_err(|e| {
-        error!("Fallo RPC hacia el analizador en Python para {}: {}", track.id, e);
-        TrackManagerError::MetadataError(e)
-    })?;
+    let analysis = async {
+        let metadata = python.call::<serde_json::Value>("analyze_local_file", &path).await.map_err(|e| {
+            error!("Fallo RPC hacia el analizador en Python para {}: {}", track.id, e);
+            TrackManagerError::MetadataError(e)
+        })?;
 
-    let bpm = metadata["bpm"].as_i64().map(|v| v as i32);
-    let camelot = metadata["camelotKey"].as_str().map(|s| s.to_string());
+        let bpm = metadata["bpm"].as_i64().map(|v| v as i32);
+        let camelot = metadata["camelotKey"].as_str().map(|s| s.to_string());
 
-    repo.update_analysis_data(&track.id, bpm, camelot.clone()).await.map_err(|e| {
-        error!("Fallo SQL al guardar análisis para {}: {}", track.id, e);
-        TrackManagerError::DatabaseError(e.to_string())
-    })?;
+        repo.update_analysis_data(&track.id, bpm, camelot.clone()).await.map_err(|e| {
+            error!("Fallo SQL al guardar análisis para {}: {}", track.id, e);
+            TrackManagerError::DatabaseError(e.to_string())
+        })?;
 
-    info!("Análisis persistido para {}: BPM={:?}, Key={:?}", track.id, bpm, camelot);
+        info!("Análisis persistido para {}: BPM={:?}, Key={:?}", track.id, bpm, camelot);
+        Ok::<_, TrackManagerError>((bpm, camelot))
+    }.await;
 
-    let analyzed_track = Track { bpm, camelot_key: camelot, ..track };
-    let _ = events.send(DownloadEvent::AnalyzeFinished { track: analyzed_track.clone() });
+    match analysis {
+        Ok((bpm, camelot_key)) => {
+            let analyzed_track = Track { bpm, camelot_key, ..track };
+            let _ = events.send(DownloadEvent::AnalyzeFinished { track: analyzed_track.clone() });
+            Ok(analyzed_track)
+        }
+        Err(e) => {
+            let _ = events.send(DownloadEvent::AnalyzeFailed {
+                id:              track.id,
+                title:           track.title,
+                thumbnail_small: track.thumbnail_small,
+                message:         e.to_string(),
+            });
+            Err(e)
+        }
+    }
+}
 
-    Ok(analyzed_track)
+/// Busca la letra en LRCLIB, la guarda como `.lrc` junto al audio y publica
+/// `LyricsFound`/`LyricsNotFound`. Devuelve si se guardó una letra.
+async fn fetch_and_store_lyrics(
+    lyrics: &LyricsClient,
+    events: &broadcast::Sender<DownloadEvent>,
+    track: &Track,
+) -> bool {
+    let Some(audio_path) = track.file_path.as_deref() else {
+        return false;
+    };
+    let lyrics_path = Path::new(audio_path).with_extension("lrc");
+    let artist = track.artists
+        .first()
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "Desconocido".to_string());
+
+    info!("Buscando letras para {} — {}", track.id, track.title);
+
+    let found = match lyrics.find_best_lyrics(&track.title, &artist, track.duration_seconds).await {
+        Ok(response) => match response.best_content() {
+            Some(content) => match tokio::fs::write(&lyrics_path, content).await {
+                Ok(()) => {
+                    info!("Letras guardadas para {}", track.id);
+                    true
+                }
+                Err(e) => {
+                    error!("No se pudo escribir .lrc para {}: {}", track.id, e);
+                    false
+                }
+            },
+            None => {
+                info!("LRCLIB respondió pero sin contenido usable para {}", track.id);
+                false
+            }
+        },
+        Err(e) => {
+            info!("Sin letras en LRCLIB para {} — {}: {}", track.id, track.title, e);
+            false
+        }
+    };
+
+    let (id, title, thumbnail_small) = (track.id.clone(), track.title.clone(), track.thumbnail_small.clone());
+    let _ = events.send(if found {
+        DownloadEvent::LyricsFound { id, title, thumbnail_small }
+    } else {
+        DownloadEvent::LyricsNotFound { id, title, thumbnail_small }
+    });
+
+    found
 }
 
 // ─── PARSERS EXTRACCIÓN ───────────────────────────────────────────────────────

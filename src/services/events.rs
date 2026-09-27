@@ -50,4 +50,34 @@ pub enum DownloadEvent {
     AnalyzeFinished {
         track: Track,
     },
+    /// El análisis de BPM/key falló.
+    AnalyzeFailed {
+        id:              String,
+        title:           String,
+        thumbnail_small: Option<String>,
+        message:         String,
+    },
+    /// Letra encontrada en LRCLIB y guardada como `.lrc`.
+    LyricsFound {
+        id:              String,
+        title:           String,
+        thumbnail_small: Option<String>,
+    },
+    /// LRCLIB no tuvo letra usable (o no se pudo guardar).
+    LyricsNotFound {
+        id:              String,
+        title:           String,
+        thumbnail_small: Option<String>,
+    },
+    /// Metadatos reescritos desde YT Music — trae el track ya actualizado.
+    MetadataUpdated {
+        track: Track,
+    },
+    /// No se pudieron actualizar los metadatos.
+    MetadataFailed {
+        id:              String,
+        title:           String,
+        thumbnail_small: Option<String>,
+        message:         String,
+    },
 }

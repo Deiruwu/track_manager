@@ -236,7 +236,15 @@ impl TrackHubServer {
                 }
             }
 
-            // 3d. REANALYZE: Recalcula BPM/key de un track ya descargado.
+            // 3d. REFRESH_LYRICS: Vuelve a buscar la letra (.lrc) de un track ya descargado.
+            "refresh_lyrics" => {
+                match manager.refresh_lyrics(&req.query).await {
+                    Ok(track) => Response::ok(track),
+                    Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
+            // 3e. REANALYZE: Recalcula BPM/key de un track ya descargado.
             "reanalyze" => {
                 match manager.reanalyze(&req.query).await {
                     Ok(track) => Response::ok(track),
