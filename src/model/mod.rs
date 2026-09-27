@@ -5,6 +5,7 @@ mod album_result;
 mod artist_result;
 mod track;
 mod track_result;
+mod search_item;
 
 pub use artist::Artist;
 pub use album::Album;
@@ -13,3 +14,4 @@ pub use album_result::{AlbumPayload, AlbumResult};
 pub use artist_result::{ArtistPayload, ArtistResult, ArtistProfileResult};
 pub use track::Track;
 pub use track_result::TrackResult;
+pub use search_item::SearchItem;

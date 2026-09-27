@@ -4,7 +4,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 use crate::api::server::SearchFilter;
 use crate::lyrics_services::lyrics_client::LyricsClient;
-use crate::model::{Album, AlbumPayload, AlbumResult, Artist, ArtistPayload, ArtistProfileResult, ArtistResult, Track, TrackResult};
+use crate::model::{Album, AlbumPayload, AlbumResult, Artist, ArtistPayload, ArtistProfileResult, ArtistResult, SearchItem, Track, TrackResult};
 use crate::repository::TrackRepository;
 use crate::services::{DownloadError, DownloadService, DownloadEvent, PythonClient};
 
@@ -118,6 +118,28 @@ impl TrackManager {
         Ok(tracks)
     }
 
+    /// Acción "search_items": búsqueda heterogénea (canciones, videos, álbumes,
+    /// artistas o todo mezclado). Los tracks ya descargados se reemplazan por
+    /// su fila de BD, igual que en `search`.
+    pub async fn search_items(&self, query: &str, limit: usize, filter: SearchFilter) -> Result<Vec<SearchItem>, TrackManagerError> {
+        let mut items: Vec<SearchItem> = self.python.call_with_payload(serde_json::json!({
+            "action": "search_items",
+            "query":  query,
+            "limit":  limit,
+            "filter": filter,
+        })).await.map_err(TrackManagerError::MetadataError)?;
+
+        for item in items.iter_mut() {
+            if let SearchItem::Track(track) = item {
+                if let Ok(db_track) = self.get_local_track(&track.id).await {
+                    *track = db_track;
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
     /// Acción "download": Orquestador destructivo/escritura.
     /// Verifica cache físico antes de spawnear la descarga para evitar DDoS.
     pub async fn download_track(&self, query: &str) -> Result<Track, TrackManagerError> {
@@ -127,7 +149,31 @@ impl TrackManager {
             return Ok(track);
         }
 
-        self.download_and_save(track).await
+        self.download_and_save(track, false).await
+    }
+
+    /// Acción "redownload": vuelve a bajar el audio aunque ya exista archivo o `file_path`.
+    pub async fn redownload_track(&self, query: &str) -> Result<Track, TrackManagerError> {
+        let track = self.resolve_metadata(query).await?;
+        self.download_and_save(Track { file_path: None, ..track }, true).await
+    }
+
+    /// Acción "refresh_metadata": vuelve a pedir título/artistas/álbum/portadas
+    /// a Python y los reescribe en BD, sin tocar archivo ni análisis.
+    pub async fn refresh_metadata(&self, query: &str) -> Result<Track, TrackManagerError> {
+        let id = extract_video_id(query).unwrap_or_else(|| query.trim().to_string());
+        let fresh = self.python_get_by_id(&id).await?;
+
+        self.repo.upsert_track_metadata(&fresh).await
+            .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(self.db_get(&id).await?.unwrap_or(fresh))
+    }
+
+    /// Acción "reanalyze": vuelve a calcular BPM/key de un track ya descargado.
+    pub async fn reanalyze(&self, query: &str) -> Result<Track, TrackManagerError> {
+        let track = self.get_local_track(query).await?;
+        analyze_and_persist(&self.repo, &self.python, &self.events, track).await
     }
 
 
@@ -321,9 +367,9 @@ impl TrackManager {
         Ok(track)
     }
 
-    async fn download_and_save(&self, track: Track) -> Result<Track, TrackManagerError> {
+    async fn download_and_save(&self, track: Track, force_overwrite: bool) -> Result<Track, TrackManagerError> {
         // 1. Descarga del audio (Bloquea esta request, pero no el servidor TCP)
-        let path = match self.downloader.download(&track).await {
+        let path = match self.downloader.download(&track, force_overwrite).await {
             Ok(path) => path,
             Err(e) => {
                 let _ = self.events.send(DownloadEvent::Failed {
@@ -356,37 +402,12 @@ impl TrackManager {
 
         // 3. Fire and Forget: análisis BPM/key (como ya estaba)
         let repo_bg = self.repo.clone();
-        let id_bg = saved_track.id.clone();
-        let path_bg = path.clone();
         let python_bg = self.python.clone();
         let events_bg = self.events.clone();
         let track_bg = saved_track.clone();
 
         tokio::spawn(async move {
-            info!("Iniciando análisis asíncrono para {}", id_bg);
-
-            let _ = events_bg.send(DownloadEvent::AnalyzeStarted {
-                id:              track_bg.id.clone(),
-                title:           track_bg.title.clone(),
-                thumbnail_small: track_bg.thumbnail_small.clone(),
-            });
-
-            match python_bg.call::<serde_json::Value>("analyze_local_file", &path_bg).await {
-                Ok(metadata) => {
-                    let bpm = metadata["bpm"].as_i64().map(|v| v as i32);
-                    let camelot = metadata["camelotKey"].as_str().map(|s| s.to_string());
-
-                    if let Err(e) = repo_bg.update_analysis_data(&id_bg, bpm, camelot.clone()).await {
-                        error!("Fallo SQL al guardar análisis para {}: {}", id_bg, e);
-                    } else {
-                        info!("Análisis persistido para {}: BPM={:?}, Key={:?}", id_bg, bpm, camelot);
-
-                        let analyzed_track = Track { bpm, camelot_key: camelot, ..track_bg };
-                        let _ = events_bg.send(DownloadEvent::AnalyzeFinished { track: analyzed_track });
-                    }
-                }
-                Err(e) => error!("Fallo RPC hacia el analizador en Python para {}: {}", id_bg, e),
-            }
+            let _ = analyze_and_persist(&repo_bg, &python_bg, &events_bg, track_bg).await;
         });
 
         let lyrics_client = self.lyrics.clone();
@@ -426,6 +447,47 @@ impl TrackManager {
         Ok(saved_track)
     }
 
+}
+
+/// Analiza BPM/key del archivo del track en Python, lo persiste y publica
+/// `AnalyzeStarted`/`AnalyzeFinished`. Devuelve el track ya analizado.
+async fn analyze_and_persist(
+    repo: &TrackRepository,
+    python: &PythonClient,
+    events: &broadcast::Sender<DownloadEvent>,
+    track: Track,
+) -> Result<Track, TrackManagerError> {
+    let Some(path) = track.file_path.clone() else {
+        return Err(TrackManagerError::NoResults);
+    };
+
+    info!("Iniciando análisis asíncrono para {}", track.id);
+
+    let _ = events.send(DownloadEvent::AnalyzeStarted {
+        id:              track.id.clone(),
+        title:           track.title.clone(),
+        thumbnail_small: track.thumbnail_small.clone(),
+    });
+
+    let metadata = python.call::<serde_json::Value>("analyze_local_file", &path).await.map_err(|e| {
+        error!("Fallo RPC hacia el analizador en Python para {}: {}", track.id, e);
+        TrackManagerError::MetadataError(e)
+    })?;
+
+    let bpm = metadata["bpm"].as_i64().map(|v| v as i32);
+    let camelot = metadata["camelotKey"].as_str().map(|s| s.to_string());
+
+    repo.update_analysis_data(&track.id, bpm, camelot.clone()).await.map_err(|e| {
+        error!("Fallo SQL al guardar análisis para {}: {}", track.id, e);
+        TrackManagerError::DatabaseError(e.to_string())
+    })?;
+
+    info!("Análisis persistido para {}: BPM={:?}, Key={:?}", track.id, bpm, camelot);
+
+    let analyzed_track = Track { bpm, camelot_key: camelot, ..track };
+    let _ = events.send(DownloadEvent::AnalyzeFinished { track: analyzed_track.clone() });
+
+    Ok(analyzed_track)
 }
 
 // ─── PARSERS EXTRACCIÓN ───────────────────────────────────────────────────────

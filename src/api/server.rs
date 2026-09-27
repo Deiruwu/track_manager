@@ -15,6 +15,12 @@ use crate::managers::TrackManager;
 pub enum SearchFilter {
     Songs,
     Videos,
+    /// Solo "search_items".
+    Albums,
+    /// Solo "search_items".
+    Artists,
+    /// Solo "search_items": sin filtro, resultados mezclados.
+    All,
 }
 
 impl Default for SearchFilter {
@@ -197,9 +203,42 @@ impl TrackHubServer {
                 }
             }
 
+            // 2b. SEARCH_ITEMS: Como SEARCH, pero heterogéneo (tracks, álbumes,
+            // artistas) y tagueado por "kind". Filtros: songs | videos | albums | artists | all.
+            "search_items" => {
+                match manager.search_items(&req.query, req.limit.unwrap_or(15), req.filter).await {
+                    Ok(results) => Response::ok(results),
+                    Err(e)      => Response::err(e.to_string()),
+                }
+            }
+
             // 3. DOWNLOAD: Fuerza la descarga a Opus, análisis y guardado en BD.
             "download" => {
                 match manager.download_track(&req.query).await {
+                    Ok(track) => Response::ok(track),
+                    Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
+            // 3b. REDOWNLOAD: Como DOWNLOAD, pero baja el audio aunque ya exista.
+            "redownload" => {
+                match manager.redownload_track(&req.query).await {
+                    Ok(track) => Response::ok(track),
+                    Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
+            // 3c. REFRESH_METADATA: Reescribe título/artistas/álbum/portadas desde YT Music.
+            "refresh_metadata" => {
+                match manager.refresh_metadata(&req.query).await {
+                    Ok(track) => Response::ok(track),
+                    Err(e)    => Response::err(e.to_string()),
+                }
+            }
+
+            // 3d. REANALYZE: Recalcula BPM/key de un track ya descargado.
+            "reanalyze" => {
+                match manager.reanalyze(&req.query).await {
                     Ok(track) => Response::ok(track),
                     Err(e)    => Response::err(e.to_string()),
                 }

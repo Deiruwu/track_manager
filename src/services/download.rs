@@ -56,7 +56,8 @@ impl DownloadService {
         Self { cache_dir: cache_dir.into(), events }
     }
 
-    pub async fn download(&self, track: &Track) -> Result<String, DownloadError> {
+    /// `force_overwrite` vuelve a bajar el audio aunque ya exista en disco.
+    pub async fn download(&self, track: &Track, force_overwrite: bool) -> Result<String, DownloadError> {
         tokio::fs::create_dir_all(&self.cache_dir).await?;
 
         let output_template = self.cache_dir
@@ -66,17 +67,22 @@ impl DownloadService {
 
         let url = format!("https://www.youtube.com/watch?v={}", track.id);
 
-        let mut child = Command::new("yt-dlp")
-            .args([
-                "-f", "ba[ext=webm]/ba[ext=opus]/ba",
-                "-x",
-                "--audio-format", "opus",
-                "-r", "3M",
-                "-o", &output_template,
-                "--newline",
-                "--progress-template", "download:%(progress)j",
-                &url,
-            ])
+        let mut command = Command::new("yt-dlp");
+        command.args([
+            "-f", "ba[ext=webm]/ba[ext=opus]/ba",
+            "-x",
+            "--audio-format", "opus",
+            "-r", "3M",
+            "-o", &output_template,
+            "--newline",
+            "--progress-template", "download:%(progress)j",
+        ]);
+        if force_overwrite {
+            command.arg("--force-overwrites");
+        }
+
+        let mut child = command
+            .arg(&url)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
