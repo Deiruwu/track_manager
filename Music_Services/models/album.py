@@ -58,3 +58,25 @@ class AlbumStub:
             "type": self.album_type,
             "year": self.year,
         }
+
+@dataclass(frozen=True, slots=True)
+class AlbumSearchResult:
+    """Álbum tal como aparece en una búsqueda: stub + artistas acreditados."""
+    id: str
+    name: str
+    thumbnail_small: Optional[Thumbnail]
+    thumbnail_large: Optional[Thumbnail]
+    album_type: Optional[str]
+    year: Optional[str]
+    artists: tuple = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "thumbnail_small": self.thumbnail_small.url if self.thumbnail_small else None,
+            "thumbnail_large": self.thumbnail_large.url if self.thumbnail_large else None,
+            "type": self.album_type,
+            "year": self.year,
+            "artists": [artist.to_dict() for artist in self.artists],
+        }

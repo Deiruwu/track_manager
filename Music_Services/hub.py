@@ -4,7 +4,7 @@ import logging
 import os
 from ytmusicapi import YTMusic
 
-from repositories.yt.search import YTMusicSearchRepository
+from repositories.yt.search import YTMusicSearchRepository, SEARCH_ITEM_TYPES
 from repositories.yt.track import YTMusicTrackRepository
 from repositories.yt.radio import YTMusicRadioRepository
 from repositories.yt.album import YTMusicAlbumRepository
@@ -38,6 +38,7 @@ class MusicHubServer:
 
         self.routes = {
             "search": self._handle_search,
+            "search_items": self._handle_search_items,
             "track":  self._handle_track,
             "album":  self._handle_album,
             "artist": self._handle_artist,
@@ -84,6 +85,17 @@ class MusicHubServer:
 
         tracks = await self.search_repo.search(query=query, type=filter, limit=limit)
         return {"status": "ok", "data": [t.to_dict() for t in tracks]}
+
+    async def _handle_search_items(self, payload: dict) -> dict:
+        query  = payload["query"]
+        filter = payload.get("filter", "all")   # songs | videos | albums | artists | all
+        limit  = int(payload.get("limit", 5))
+
+        if filter not in SEARCH_ITEM_TYPES:
+            return {"status": "error", "message": f"Filtro inválido: {filter}. Usa uno de {', '.join(SEARCH_ITEM_TYPES)}"}
+
+        items = await self.search_repo.search_items(query=query, type=filter, limit=limit)
+        return {"status": "ok", "data": items}
 
     async def _handle_track(self, payload: dict) -> dict:
         track = await self.track_repo.get_track(track_id=payload["query"])
