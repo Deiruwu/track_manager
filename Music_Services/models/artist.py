@@ -48,6 +48,7 @@ class ArtistDetail:
     views: Optional[int]
     songs: tuple
     albums: tuple
+    related: tuple = ()
 
     def to_dict(self) -> dict:
         return {
@@ -57,4 +58,5 @@ class ArtistDetail:
             "views": self.views,
             "songs": [song.to_dict() for song in self.songs],
             "albums": [album.to_dict() for album in self.albums],
+            "related": [artist.to_dict() for artist in self.related],
         }

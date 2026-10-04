@@ -259,6 +259,7 @@ impl TrackManager {
             views: payload.views,
             songs,
             albums,
+            related: payload.related,
         })
     }
 

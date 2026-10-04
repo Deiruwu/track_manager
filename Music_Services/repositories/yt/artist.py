@@ -68,6 +68,13 @@ class YTMusicArtistRepository:
         # Sin ordenar: Rust ordena por año al armar ArtistResult (track_manager.rs).
         discography = albums + singles
 
+        # "A los fans también les gusta": ya viene en la misma respuesta de get_artist.
+        related = tuple(
+            self._map_related_artist(item)
+            for item in (raw.get('related') or {}).get('results', [])
+            if item.get('browseId')
+        )
+
         return ArtistDetail(
             id=artist_id,
             name=name,
@@ -75,6 +82,7 @@ class YTMusicArtistRepository:
             views=views,
             songs=songs,
             albums=discography,
+            related=related,
         )
 
     def _collect_discography(self, block: dict | None, default_type: str) -> tuple[AlbumStub, ...]:
@@ -92,6 +100,16 @@ class YTMusicArtistRepository:
             items = block.get('results', [])
 
         return tuple(self._map_album_stub(item, default_type) for item in items)
+
+    @staticmethod
+    def _map_related_artist(item: dict) -> ArtistProfile:
+        small, large = best_thumbnails(item.get('thumbnails') or [])
+        return ArtistProfile(
+            id=item['browseId'],
+            name=item.get('title', ''),
+            thumbnail_small=small,
+            thumbnail_large=large,
+        )
 
     @staticmethod
     def _map_album_stub(item: dict, default_type: str) -> AlbumStub:

@@ -12,6 +12,9 @@ pub struct ArtistPayload {
     pub views:  Option<i64>,
     pub songs:  Vec<Track>,
     pub albums: Vec<AlbumStub>,
+    /// Artistas relacionados ("A los fans también les gusta").
+    #[serde(default)]
+    pub related: Vec<ArtistProfileResult>,
 }
 
 #[derive(Serialize)]
@@ -22,6 +25,7 @@ pub struct ArtistResult {
     pub views:  Option<i64>,
     pub songs:  Vec<TrackResult>,
     pub albums: Vec<AlbumStub>,
+    pub related: Vec<ArtistProfileResult>,
 }
 
 /// Versión "dummy" del artista: solo id, nombre y foto de perfil — sin banner,
