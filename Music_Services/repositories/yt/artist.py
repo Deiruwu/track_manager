@@ -4,7 +4,7 @@ from ytmusicapi import YTMusic
 from models.track import Track
 from models.album import AlbumStub
 from models.artist import ArtistDetail, ArtistProfile, ArtistRef
-from repositories.yt._mapper import map_track, best_thumbnails
+from repositories.yt._mapper import map_track, best_thumbnails, parse_duration
 
 
 def _parse_views(raw: str | None) -> int | None:
@@ -61,9 +61,15 @@ class YTMusicArtistRepository:
             for song in (map_track(item) for item in song_results)
         )
 
-        albums, singles = await asyncio.gather(
+        albums, singles, durations = await asyncio.gather(
             asyncio.to_thread(self._collect_discography, raw.get('albums'), 'Album'),
             asyncio.to_thread(self._collect_discography, raw.get('singles'), 'Single'),
+            asyncio.to_thread(self._song_durations, raw.get('songs'), songs, song_limit),
+        )
+        # get_artist no trae la duración de las canciones top: sale de la playlist "Canciones" del artista.
+        songs = tuple(
+            replace(song, duration_seconds=durations.get(song.id, 0)) if not song.duration_seconds else song
+            for song in songs
         )
         # Sin ordenar: Rust ordena por año al armar ArtistResult (track_manager.rs).
         discography = albums + singles
@@ -84,6 +90,25 @@ class YTMusicArtistRepository:
             albums=discography,
             related=related,
         )
+
+    def _song_durations(self, block: dict | None, songs: tuple[Track, ...], song_limit: int) -> dict[str, int]:
+        """Duración por videoId de las canciones top, leída de la playlist del
+        bloque "Canciones" (que sí la trae). Vacío si no hace falta o falla:
+        quedan en 0 y Rust usa la duración guardada en la BD, si la hay."""
+        playlist_id = (block or {}).get('browseId')
+        if not playlist_id or all(song.duration_seconds for song in songs):
+            return {}
+        try:
+            # Margen sobre song_limit: la playlist puede no venir en el mismo orden que el bloque.
+            playlist = self._client.get_playlist(playlist_id, limit=max(song_limit * 4, 25))
+        except Exception as e:
+            print(f"[get_artist_overview] Sin duraciones de {playlist_id}: {e}")
+            return {}
+        return {
+            item['videoId']: parse_duration(item)
+            for item in playlist.get('tracks') or []
+            if item.get('videoId')
+        }
 
     def _collect_discography(self, block: dict | None, default_type: str) -> tuple[AlbumStub, ...]:
         if not block:

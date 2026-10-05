@@ -20,9 +20,8 @@ impl PythonMicroservice {
         }
     }
 
-    /// Instala dependencias del requirements.txt dentro del venv
+    /// Instala dependencias del requirements.txt dentro del venv, solo si cambiaron desde la última instalación
     async fn install_requirements(&self) -> Result<(), Box<dyn Error>> {
-        let pip_exe = self.venv_path.join("bin").join("pip");
         let requirements = self.script_path
             .parent()
             .unwrap_or(&self.script_path)
@@ -33,10 +32,27 @@ impl PythonMicroservice {
             return Ok(());
         }
 
+        let wanted = tokio::fs::read(&requirements).await?;
+        let stamp = self.venv_path.join(".requirements.installed");
+        if tokio::fs::read(&stamp).await.ok().as_deref() == Some(wanted.as_slice()) {
+            return Ok(());
+        }
+
         println!("[PIP] Instalando dependencias...");
 
-        let status = Command::new(&pip_exe)
-            .args(["install", "-r"])
+        let python_exe = self.venv_path.join("bin").join("python");
+        let mut command = if Self::has_uv().await {
+            let mut c = Command::new("uv");
+            c.args(["pip", "install", "--python"]).arg(&python_exe);
+            c
+        } else {
+            let mut c = Command::new(self.venv_path.join("bin").join("pip"));
+            c.arg("install");
+            c
+        };
+
+        let status = command
+            .arg("-r")
             .arg(&requirements)
             .status()
             .await?;
@@ -45,8 +61,20 @@ impl PythonMicroservice {
             return Err(format!("pip install falló con código: {}", status).into());
         }
 
+        tokio::fs::write(&stamp, &wanted).await?;
         println!("[PIP] Dependencias instaladas.");
         Ok(())
+    }
+
+    /// Indica si `uv` está disponible en el PATH
+    async fn has_uv() -> bool {
+        Command::new("uv")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|s| s.success())
     }
 
     /// Inicia el proceso de Python dentro del venv

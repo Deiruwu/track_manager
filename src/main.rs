@@ -11,7 +11,7 @@ pub mod utils;
 pub mod lyrics_services;
 
 use repository::TrackRepository;
-use crate::infrastructure::init_db_pool;
+use crate::infrastructure::{init_db_pool, MIGRATOR};
 use crate::api::TrackHubServer;
 use crate::managers::TrackManager;
 use crate::services::{DownloadService, PythonClient, PythonMicroservice};
@@ -32,10 +32,7 @@ async fn main() {
         }
     };
 
-    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
-    sqlx::migrate::Migrator::new(migrations_dir)
-        .await
-        .expect("[Database] Error cargando migraciones")
+    MIGRATOR
         .run(&pool)
         .await
         .expect("[Database] Error corriendo migraciones");

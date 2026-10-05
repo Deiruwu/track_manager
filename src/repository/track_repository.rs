@@ -1,15 +1,59 @@
-use sqlx::PgPool;
+use chrono::{DateTime, Utc};
+use sqlx::{FromRow, QueryBuilder};
 use tracing::info;
+use crate::infrastructure::{Db, DbPool};
 use crate::model::{Album, Artist, Track};
 use crate::repository::errors::RepositoryError;
 
+/// Columnas de `tracks` + álbum unido, tal como las devuelve `TRACK_SELECT`.
+#[derive(FromRow)]
+struct TrackRow {
+    uuid:             String,
+    title:            String,
+    duration_seconds: i32,
+    thumbnail_small:  Option<String>,
+    thumbnail_large:  Option<String>,
+    bpm:              Option<i32>,
+    camelot_key:      Option<String>,
+    file_path:        Option<String>,
+    added_at:         Option<DateTime<Utc>>,
+    album_id:         Option<String>,
+    album_name:       Option<String>,
+}
+
+/// Artista unido a la pista a la que pertenece.
+#[derive(FromRow)]
+struct TrackArtistRow {
+    track_uuid: String,
+    id:         String,
+    name:       String,
+}
+
+/// SELECT base de tracks con su álbum; cada caller agrega su WHERE.
+const TRACK_SELECT: &str = r#"
+    SELECT
+        t.uuid,
+        t.title,
+        t.duration_seconds,
+        t.thumbnail_small,
+        t.thumbnail_large,
+        t.bpm,
+        t.camelot_key,
+        t.file_path,
+        t.added_at,
+        al.id   AS album_id,
+        al.name AS album_name
+    FROM   tracks t
+    LEFT JOIN albums al ON al.id = t.album_id
+"#;
+
 #[derive(Clone)]
 pub struct TrackRepository {
-    pool: PgPool,
+    pool: DbPool,
 }
 
 impl TrackRepository {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: DbPool) -> Self {
         Self { pool }
     }
 
@@ -22,47 +66,14 @@ impl TrackRepository {
         path.filter(|p| !p.ends_with(".lrc"))
     }
 
-    // ── Lectura ───────────────────────────────────────────────────────────────
-
-    /// Busca un track por su ID, resolviendo álbum y artistas en el mismo viaje.
-    /// Devuelve `None` si no existe.
-    pub async fn get_by_id(&self, id: &str) -> Result<Option<Track>, RepositoryError> {
-        let row = sqlx::query!(
-            r#"
-            SELECT
-                t.uuid,
-                t.title,
-                t.duration_seconds,
-                t.thumbnail_small,
-                t.thumbnail_large,
-                t.bpm,
-                t.camelot_key,
-                t.file_path,
-                t.added_at,
-                al.id   AS "album_id?",
-                al.name AS "album_name?"
-            FROM   tracks t
-            LEFT JOIN albums al ON al.id = t.album_id
-            WHERE  t.uuid = $1
-            "#,
-            id
-        )
-            .fetch_optional(&self.pool)
-            .await?;
-
-        let row = match row {
-            Some(r) => r,
-            None    => return Ok(None),
-        };
-
-        let artists = self.get_artists_for_track(id).await?;
-
+    /// Arma el `Track` de dominio a partir de la fila y sus artistas.
+    fn track_from_row(row: TrackRow, artists: Vec<Artist>) -> Track {
         let album = match (row.album_id, row.album_name) {
             (Some(id), Some(name)) => Some(Album { id, name }),
             _                      => None,
         };
 
-        Ok(Some(Track {
+        Track {
             id:               row.uuid,
             title:            row.title,
             duration_seconds: row.duration_seconds,
@@ -74,28 +85,31 @@ impl TrackRepository {
             added_at:         row.added_at,
             album,
             artists,
-        }))
+        }
+    }
+
+    // ── Lectura ───────────────────────────────────────────────────────────────
+
+    /// Busca un track por su ID, resolviendo álbum y artistas en el mismo viaje.
+    /// Devuelve `None` si no existe.
+    pub async fn get_by_id(&self, id: &str) -> Result<Option<Track>, RepositoryError> {
+        let row = sqlx::query_as::<_, TrackRow>(&format!("{TRACK_SELECT} WHERE t.uuid = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        let row = match row {
+            Some(r) => r,
+            None    => return Ok(None),
+        };
+
+        let artists = self.get_artists_for_track(id).await?;
+
+        Ok(Some(Self::track_from_row(row, artists)))
     }
 
     pub async fn get_all(&self) -> Result<Vec<Track>, RepositoryError> {
-        let rows = sqlx::query!(
-        r#"
-        SELECT
-            t.uuid,
-            t.title,
-            t.duration_seconds,
-            t.thumbnail_small,
-            t.thumbnail_large,
-            t.bpm,
-            t.camelot_key,
-            t.file_path,
-            t.added_at,
-            al.id   AS "album_id?",
-            al.name AS "album_name?"
-        FROM   tracks t
-        LEFT JOIN albums al ON al.id = t.album_id
-        "#
-    )
+        let rows = sqlx::query_as::<_, TrackRow>(TRACK_SELECT)
             .fetch_all(&self.pool)
             .await?;
 
@@ -103,25 +117,7 @@ impl TrackRepository {
 
         for row in rows {
             let artists = self.get_artists_for_track(&row.uuid).await?;
-
-            let album = match (row.album_id, row.album_name) {
-                (Some(id), Some(name)) => Some(Album { id, name }),
-                _                      => None,
-            };
-
-            tracks.push(Track {
-                id:               row.uuid,
-                title:            row.title,
-                duration_seconds: row.duration_seconds,
-                thumbnail_small:  row.thumbnail_small,
-                thumbnail_large:  row.thumbnail_large,
-                bpm:              row.bpm,
-                camelot_key:      row.camelot_key,
-                file_path:        Self::valid_audio_path(row.file_path),
-                added_at:         row.added_at,
-                album,
-                artists,
-            });
+            tracks.push(Self::track_from_row(row, artists));
         }
 
         Ok(tracks)
@@ -135,26 +131,16 @@ impl TrackRepository {
         }
 
         // Query 1: tracks + álbumes
-        let rows = sqlx::query!(
-            r#"
-            SELECT
-                t.uuid,
-                t.title,
-                t.duration_seconds,
-                t.thumbnail_small,
-                t.thumbnail_large,
-                t.bpm,
-                t.camelot_key,
-                t.file_path,
-                t.added_at,
-                al.id   AS "album_id?",
-                al.name AS "album_name?"
-            FROM   tracks t
-            LEFT JOIN albums al ON al.id = t.album_id
-            WHERE  t.uuid = ANY($1)
-            "#,
-            ids
-        )
+        let mut query = QueryBuilder::<Db>::new(TRACK_SELECT);
+        query.push(" WHERE t.uuid IN (");
+        let mut list = query.separated(", ");
+        for id in ids {
+            list.push_bind(id);
+        }
+        list.push_unseparated(")");
+
+        let rows = query
+            .build_query_as::<TrackRow>()
             .fetch_all(&self.pool)
             .await?;
 
@@ -162,18 +148,22 @@ impl TrackRepository {
             return Ok(vec![]);
         }
 
-        let found_ids: Vec<String> = rows.iter().map(|r| r.uuid.clone()).collect();
-
         // Query 2: todos los artistas de todos esos tracks de una vez
-        let artist_rows = sqlx::query!(
+        let mut query = QueryBuilder::<Db>::new(
             r#"
             SELECT ta.track_uuid, a.id, a.name
             FROM   track_artists ta
             JOIN   artists a ON a.id = ta.artist_id
-            WHERE  ta.track_uuid = ANY($1)
-            "#,
-            &found_ids
-        )
+            WHERE  ta.track_uuid IN ("#,
+        );
+        let mut list = query.separated(", ");
+        for row in &rows {
+            list.push_bind(row.uuid.clone());
+        }
+        list.push_unseparated(")");
+
+        let artist_rows = query
+            .build_query_as::<TrackArtistRow>()
             .fetch_all(&self.pool)
             .await?;
 
@@ -191,23 +181,7 @@ impl TrackRepository {
             .into_iter()
             .map(|row| {
                 let artists = artists_map.remove(&row.uuid).unwrap_or_default();
-                let album = match (row.album_id, row.album_name) {
-                    (Some(id), Some(name)) => Some(Album { id, name }),
-                    _                      => None,
-                };
-                Track {
-                    id:               row.uuid,
-                    title:            row.title,
-                    duration_seconds: row.duration_seconds,
-                    thumbnail_small:  row.thumbnail_small,
-                    thumbnail_large:  row.thumbnail_large,
-                    bpm:              row.bpm,
-                    camelot_key:      row.camelot_key,
-                    file_path:        Self::valid_audio_path(row.file_path),
-                    added_at:         row.added_at,
-                    album,
-                    artists,
-                }
+                Self::track_from_row(row, artists)
             })
             .collect();
 
@@ -215,11 +189,11 @@ impl TrackRepository {
     }
 
     pub async fn get_all_ids(&self) -> Result<Vec<String>, RepositoryError> {
-        let rows = sqlx::query!("SELECT uuid FROM tracks")
+        let ids = sqlx::query_scalar::<_, String>("SELECT uuid FROM tracks")
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(rows.into_iter().map(|r| r.uuid).collect())
+        Ok(ids)
     }
 
     // ── Escritura ─────────────────────────────────────────────────────────────
@@ -232,37 +206,32 @@ impl TrackRepository {
 
         // 1. Álbum
         if let Some(album) = &track.album {
-            sqlx::query!(
-                r#"
+            sqlx::query(r#"
                 INSERT INTO albums (id, name)
                 VALUES ($1, $2)
                 ON CONFLICT (id) DO NOTHING
-                "#,
-                album.id,
-                album.name,
-            )
+                "#)
+                .bind(&album.id)
+                .bind(&album.name)
                 .execute(&mut *tx)
                 .await?;
         }
 
         // 2. Artistas
         for artist in &track.artists {
-            sqlx::query!(
-                r#"
+            sqlx::query(r#"
                 INSERT INTO artists (id, name)
                 VALUES ($1, $2)
                 ON CONFLICT (id) DO NOTHING
-                "#,
-                artist.id,
-                artist.name,
-            )
+                "#)
+                .bind(&artist.id)
+                .bind(&artist.name)
                 .execute(&mut *tx)
                 .await?;
         }
 
         // 3. Track
-        sqlx::query!(
-            r#"
+        sqlx::query(r#"
             INSERT INTO tracks (
                 uuid, title, duration_seconds,
                 album_id, thumbnail_small, thumbnail_large,
@@ -270,32 +239,32 @@ impl TrackRepository {
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (uuid) DO UPDATE SET
-                file_path = EXCLUDED.file_path
-            "#,
-            track.id,
-            track.title,
-            track.duration_seconds,
-            track.album.as_ref().map(|a| &a.id),
-            track.thumbnail_small,
-            track.thumbnail_large,
-            track.bpm,
-            track.camelot_key,
-            track.file_path,
-        )
+                file_path        = EXCLUDED.file_path,
+                duration_seconds = CASE WHEN EXCLUDED.duration_seconds > 0
+                                        THEN EXCLUDED.duration_seconds
+                                        ELSE tracks.duration_seconds END
+            "#)
+            .bind(&track.id)
+            .bind(&track.title)
+            .bind(&track.duration_seconds)
+            .bind(track.album.as_ref().map(|a| &a.id))
+            .bind(&track.thumbnail_small)
+            .bind(&track.thumbnail_large)
+            .bind(&track.bpm)
+            .bind(&track.camelot_key)
+            .bind(&track.file_path)
             .execute(&mut *tx)
             .await?;
 
         // 4. Relaciones track → artistas
         for artist in &track.artists {
-            sqlx::query!(
-                r#"
+            sqlx::query(r#"
                 INSERT INTO track_artists (track_uuid, artist_id)
                 VALUES ($1, $2)
                 ON CONFLICT DO NOTHING
-                "#,
-                track.id,
-                artist.id,
-            )
+                "#)
+                .bind(&track.id)
+                .bind(&artist.id)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -306,6 +275,8 @@ impl TrackRepository {
 
     /// Actualiza título/álbum/artistas de un track usando datos "de contexto" ya
     /// confiables (item de álbum/artista), sin necesitar que esté descargado.
+    /// La duración solo se pisa si la nueva es > 0: las canciones top de un
+    /// artista llegan sin duración y no deben borrar una ya conocida.
     /// No toca file_path, bpm ni camelot_key — así no pisa el estado de descarga
     /// ni el análisis ya guardados. Reemplaza por completo las relaciones
     /// track_artists para no dejar artistas fantasma de una resolución previa
@@ -314,35 +285,30 @@ impl TrackRepository {
         let mut tx = self.pool.begin().await?;
 
         if let Some(album) = &track.album {
-            sqlx::query!(
-                r#"
+            sqlx::query(r#"
                 INSERT INTO albums (id, name)
                 VALUES ($1, $2)
                 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-                "#,
-                album.id,
-                album.name,
-            )
+                "#)
+                .bind(&album.id)
+                .bind(&album.name)
                 .execute(&mut *tx)
                 .await?;
         }
 
         for artist in &track.artists {
-            sqlx::query!(
-                r#"
+            sqlx::query(r#"
                 INSERT INTO artists (id, name)
                 VALUES ($1, $2)
                 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-                "#,
-                artist.id,
-                artist.name,
-            )
+                "#)
+                .bind(&artist.id)
+                .bind(&artist.name)
                 .execute(&mut *tx)
                 .await?;
         }
 
-        sqlx::query!(
-            r#"
+        sqlx::query(r#"
             INSERT INTO tracks (
                 uuid, title, duration_seconds,
                 album_id, thumbnail_small, thumbnail_large
@@ -352,35 +318,33 @@ impl TrackRepository {
                 title            = EXCLUDED.title,
                 album_id         = EXCLUDED.album_id,
                 thumbnail_small  = EXCLUDED.thumbnail_small,
-                thumbnail_large  = EXCLUDED.thumbnail_large
-            "#,
-            track.id,
-            track.title,
-            track.duration_seconds,
-            track.album.as_ref().map(|a| &a.id),
-            track.thumbnail_small,
-            track.thumbnail_large,
-        )
+                thumbnail_large  = EXCLUDED.thumbnail_large,
+                duration_seconds = CASE WHEN EXCLUDED.duration_seconds > 0
+                                        THEN EXCLUDED.duration_seconds
+                                        ELSE tracks.duration_seconds END
+            "#)
+            .bind(&track.id)
+            .bind(&track.title)
+            .bind(&track.duration_seconds)
+            .bind(track.album.as_ref().map(|a| &a.id))
+            .bind(&track.thumbnail_small)
+            .bind(&track.thumbnail_large)
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query!(
-            "DELETE FROM track_artists WHERE track_uuid = $1",
-            track.id,
-        )
+        sqlx::query("DELETE FROM track_artists WHERE track_uuid = $1")
+            .bind(&track.id)
             .execute(&mut *tx)
             .await?;
 
         for artist in &track.artists {
-            sqlx::query!(
-                r#"
+            sqlx::query(r#"
                 INSERT INTO track_artists (track_uuid, artist_id)
                 VALUES ($1, $2)
                 ON CONFLICT DO NOTHING
-                "#,
-                track.id,
-                artist.id,
-            )
+                "#)
+                .bind(&track.id)
+                .bind(&artist.id)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -390,15 +354,14 @@ impl TrackRepository {
     }
 
     pub async fn update_played(&self, id: &str) -> Result<(), RepositoryError> {
-        sqlx::query!(
-        r#"
+        sqlx::query(r#"
         UPDATE tracks
         SET play_count = COALESCE(play_count, 0) + 1,
-            last_played_at = NOW()
-        WHERE uuid = $1
-        "#,
-        id
-    )
+            last_played_at = $1
+        WHERE uuid = $2
+        "#)
+            .bind(Utc::now())
+            .bind(id)
             .execute(&self.pool)
             .await?;
 
@@ -407,11 +370,9 @@ impl TrackRepository {
 
     /// Actualiza únicamente el file_path de un track existente.
     pub async fn update_path(&self, id: &str, path: &str) -> Result<(), RepositoryError> {
-        sqlx::query!(
-            "UPDATE tracks SET file_path = $1 WHERE uuid = $2",
-            path,
-            id,
-        )
+        sqlx::query("UPDATE tracks SET file_path = $1 WHERE uuid = $2")
+            .bind(path)
+            .bind(id)
             .execute(&self.pool)
             .await?;
 
@@ -456,26 +417,22 @@ impl TrackRepository {
     // ── Helpers internos ──────────────────────────────────────────────────────
 
     async fn get_artists_for_track(&self, track_id: &str) -> Result<Vec<Artist>, RepositoryError> {
-        let rows = sqlx::query!(
-            r#"
+        let rows = sqlx::query_as::<_, (String, String)>(r#"
             SELECT a.id, a.name
             FROM   track_artists ta
             JOIN   artists a ON a.id = ta.artist_id
             WHERE  ta.track_uuid = $1
-            "#,
-            track_id
-        )
+            "#)
+            .bind(track_id)
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(rows.into_iter().map(|r| Artist { id: r.id, name: r.name }).collect())
+        Ok(rows.into_iter().map(|(id, name)| Artist { id, name }).collect())
     }
 
     pub async fn delete_db_record(&self, uuid: &str) -> Result<(), RepositoryError> {
-        sqlx::query!(
-            "DELETE FROM tracks WHERE uuid = $1",
-            uuid
-        )
+        sqlx::query("DELETE FROM tracks WHERE uuid = $1")
+            .bind(uuid)
             .execute(&self.pool)
             .await?;
 
@@ -483,16 +440,14 @@ impl TrackRepository {
     }
 
     pub async fn update_analysis_data(&self, id: &str, bpm: Option<i32>, camelot_key: Option<String>) -> Result<(), RepositoryError> {
-        sqlx::query!(
-            r#"
+        sqlx::query(r#"
             UPDATE tracks
             SET bpm = $1, camelot_key = $2
             WHERE uuid = $3
-            "#,
-            bpm,
-            camelot_key,
-            id
-        )
+            "#)
+            .bind(bpm)
+            .bind(camelot_key)
+            .bind(id)
             .execute(&self.pool)
             .await?;
 

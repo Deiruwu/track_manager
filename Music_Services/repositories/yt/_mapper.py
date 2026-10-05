@@ -21,13 +21,35 @@ def map_album(raw: dict | None) -> AlbumRef | None:
     return AlbumRef(id=raw.get('id', ''), name=raw.get('name', ''))
 
 
+def parse_duration(item: dict) -> int:
+    """Segundos del item: `duration_seconds` si viene, si no el texto
+    `duration`/`length` ("3:45", "1:02:03") o `lengthSec`. 0 si no hay nada
+    (p. ej. las canciones top de get_artist, que no traen duración)."""
+    seconds = item.get('duration_seconds') or item.get('lengthSec')
+    if seconds:
+        try:
+            return int(seconds)
+        except (TypeError, ValueError):
+            pass
+    raw = item.get('duration') or item.get('length')
+    if isinstance(raw, str):
+        try:
+            total = 0
+            for part in raw.split(':'):
+                total = total * 60 + int(part)
+            return total
+        except ValueError:
+            pass
+    return 0
+
+
 def map_track(item: dict) -> Track:
     small, large = best_thumbnails(item.get('thumbnails', []))
     return Track(
         id=item.get('videoId', ''),
         title=item.get('title', ''),
         artists=map_artists(item.get('artists', [])),
-        duration_seconds=item.get('duration_seconds') or 0,
+        duration_seconds=parse_duration(item),
         thumbnail_small=small,
         thumbnail_large=large,
         album=map_album(item.get('album'))

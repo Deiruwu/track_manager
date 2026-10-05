@@ -2,7 +2,7 @@ from ytmusicapi import YTMusic
 from models.track import Track
 from models.artist import ArtistRef
 from models.album import AlbumRef, AlbumDetail
-from repositories.yt._mapper import best_thumbnails
+from repositories.yt._mapper import best_thumbnails, parse_duration
 
 
 class YTMusicAlbumRepository:
@@ -74,7 +74,7 @@ class YTMusicAlbumRepository:
             id=primary_id,
             title=item.get('title', ''),
             artists=artists,
-            duration_seconds=item.get('duration_seconds') or 0,
+            duration_seconds=parse_duration(item),
             thumbnail_small=small,
             thumbnail_large=large,
             album=album_ref,

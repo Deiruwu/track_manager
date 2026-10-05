@@ -149,12 +149,13 @@ impl TrackManager {
             return Ok(track);
         }
 
+        let track = self.with_known_duration(track).await;
         self.download_and_save(track, false).await
     }
 
     /// Acción "redownload": vuelve a bajar el audio aunque ya exista archivo o `file_path`.
     pub async fn redownload_track(&self, query: &str) -> Result<Track, TrackManagerError> {
-        let track = self.resolve_metadata(query).await?;
+        let track = self.with_known_duration(self.resolve_metadata(query).await?).await;
         self.download_and_save(Track { file_path: None, ..track }, true).await
     }
 
@@ -389,6 +390,19 @@ impl TrackManager {
             .map_err(|e| TrackManagerError::DatabaseError(e.to_string()))?;
 
         Ok(self.db_get(id).await?.unwrap_or(fresh))
+    }
+
+    /// Si el track no trae duración (p. ej. lo guardó la lista de un artista en
+    /// 0), la pide a Python, que la saca del video. Sin esto se descargaba y
+    /// quedaba en 0:00 para siempre.
+    async fn with_known_duration(&self, track: Track) -> Track {
+        if track.duration_seconds > 0 {
+            return track;
+        }
+        match self.python_get_by_id(&track.id).await {
+            Ok(fresh) if fresh.duration_seconds > 0 => Track { duration_seconds: fresh.duration_seconds, ..track },
+            _ => track,
+        }
     }
 
     async fn python_get_by_id(&self, id: &str) -> Result<Track, TrackManagerError> {

@@ -1,21 +1,7 @@
 import asyncio
 from ytmusicapi import YTMusic
 from models.track import Track
-from repositories.yt._mapper import map_artists, map_album, best_thumbnails
-
-
-def _parse_length(item: dict) -> int:
-    raw = item.get('length')
-    if raw:
-        try:
-            parts = raw.split(':')
-            if len(parts) == 2:
-                return int(parts[0]) * 60 + int(parts[1])
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-        except (ValueError, AttributeError):
-            pass
-    return int(item.get('lengthSec') or item.get('duration_seconds') or 0)
+from repositories.yt._mapper import map_artists, map_album, best_thumbnails, parse_duration
 
 
 class YTMusicRadioRepository:
@@ -35,7 +21,7 @@ class YTMusicRadioRepository:
             id=item.get('videoId', ''),
             title=item.get('title', ''),
             artists=map_artists(item.get('artists', [])),
-            duration_seconds=_parse_length(item),
+            duration_seconds=parse_duration(item),
             thumbnail_small=small,
             thumbnail_large=large,
             album=map_album(item.get('album'))
