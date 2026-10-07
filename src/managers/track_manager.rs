@@ -439,6 +439,9 @@ impl TrackManager {
             return Err(TrackManagerError::DatabaseError(e.to_string()));
         }
 
+        // La fila trae lo que pone la BD (p. ej. `added_at`), que el track armado en memoria no tiene.
+        let saved_track = self.db_get(&saved_track.id).await.ok().flatten().unwrap_or(saved_track);
+
         let _ = self.events.send(DownloadEvent::Finished {
             id: saved_track.id.clone(),
             title: saved_track.title.clone(),
@@ -508,7 +511,10 @@ async fn analyze_and_persist(
 
     match analysis {
         Ok((bpm, camelot_key)) => {
-            let analyzed_track = Track { bpm, camelot_key, ..track };
+            let analyzed_track = match repo.get_by_id(&track.id).await {
+                Ok(Some(fresh)) => fresh,
+                _ => Track { bpm, camelot_key, ..track },
+            };
             let _ = events.send(DownloadEvent::AnalyzeFinished { track: analyzed_track.clone() });
             Ok(analyzed_track)
         }

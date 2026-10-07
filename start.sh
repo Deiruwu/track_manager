@@ -69,5 +69,5 @@ ok "Entorno Python listo."
 
 # ── Compilar Rust ─────────────────────────────────────────────────────────────
 info "Compilando..."
-SQLX_OFFLINE=true cargo build --release
+cargo build --release
 ok "Binario listo en target/release/track_manager"
